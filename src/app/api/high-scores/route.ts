@@ -17,6 +17,8 @@ type StoredHighScore = {
   id: string;
   name: string;
 };
+let cachedRedis: Redis | null = null;
+let cachedRedisSignature: string | null = null;
 
 function canUsePersistentHighScores() {
   const hasUpstashEnv = Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
@@ -46,7 +48,14 @@ function getRedis() {
 
   if (!config.url || !config.token) return null;
 
-  return new Redis(config);
+  const signature = `${config.url}:${config.token}`;
+
+  if (!cachedRedis || cachedRedisSignature !== signature) {
+    cachedRedis = new Redis(config);
+    cachedRedisSignature = signature;
+  }
+
+  return cachedRedis;
 }
 
 async function getTopHighScores(): Promise<HighScoreEntry[]> {

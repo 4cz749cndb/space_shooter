@@ -455,18 +455,16 @@ select {
   background: var(--pixel-green);
 }
 
-.menu-button[aria-disabled="true"] {
+.menu-button:disabled {
   cursor: default;
   opacity: 0.55;
 }
 
-.menu-button:disabled {
+.score-submit-button:disabled {
   cursor: wait;
   opacity: 0.72;
 }
 
-.menu-button[aria-disabled="true"]:hover,
-.menu-button[aria-disabled="true"]:focus-visible,
 .menu-button:disabled:hover,
 .menu-button:disabled:focus-visible {
   background: var(--text);

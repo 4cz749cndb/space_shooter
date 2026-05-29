@@ -1,24 +1,16 @@
 "use client";
 
 import { Canvas, useFrame } from "@react-three/fiber";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
+import { GameOverScreen, RetroMenu } from "@/components/game/GameScreens";
+import { type ExplosionKind, useEightBitMusic } from "@/components/game/useEightBitMusic";
+import { useHighScores } from "@/components/game/useHighScores";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
 import type { ActionState, Enemy, PowerUpKind, Snapshot } from "@/game/simulation/types";
-import {
-  MAX_HIGH_SCORE_NAME_LENGTH,
-  qualifiesForHighScores,
-  sortHighScores,
-  staticHighScores,
-  type HighScoreEntry
-} from "@/lib/highScores";
+import { qualifiesForHighScores } from "@/lib/highScores";
 
 type GamePhase = "menu" | "playing" | "gameOver" | "exited" | "highScores";
-type ResultTune = "happy" | "sad";
-type DisplayHighScoreEntry = HighScoreEntry & {
-  isPlayer?: boolean;
-};
-type ExplosionKind = "enemy" | "player";
 type Explosion = {
   id: number;
   kind: ExplosionKind;
@@ -49,34 +41,15 @@ const initialSnapshot: Snapshot = {
   maxHealth: 5,
   events: []
 };
+const hudSnapshotInterval = 1 / 12;
 
 export function GameClient() {
   const [phase, setPhase] = useState<GamePhase>("menu");
   const [gameKey, setGameKey] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
-  const [highScores, setHighScores] = useState<HighScoreEntry[]>(staticHighScores);
+  const { highScores, refreshHighScores, submitHighScore } = useHighScores();
   const actions = useKeyboardActions(phase === "playing");
   const music = useEightBitMusic();
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "production") return;
-
-    let isMounted = true;
-
-    async function loadHighScores() {
-      const scores = await fetchHighScores();
-
-      if (isMounted) {
-        setHighScores(scores);
-      }
-    }
-
-    void loadHighScores();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   const handleNewGame = () => {
     music.stop();
@@ -95,13 +68,13 @@ export function GameClient() {
   };
 
   const handleGameOver = (finalSnapshot: Snapshot) => {
-    const qualifiesForTopThree = qualifiesForHighScores(finalSnapshot.score, highScores);
+    const qualifiesForLeaderboard = qualifiesForHighScores(finalSnapshot.score, highScores);
 
     music.stop();
     music.setIntensity(1);
     setSnapshot(finalSnapshot);
     setPhase("gameOver");
-    void music.playResultTune(qualifiesForTopThree ? "happy" : "sad");
+    void music.playResultTune(qualifiesForLeaderboard ? "happy" : "sad");
   };
 
   const handleBackToMenu = () => {
@@ -109,6 +82,11 @@ export function GameClient() {
     music.setIntensity(1);
     setSnapshot(initialSnapshot);
     setPhase("menu");
+  };
+
+  const handleHighScores = () => {
+    void refreshHighScores();
+    setPhase("highScores");
   };
 
   return (
@@ -140,8 +118,8 @@ export function GameClient() {
           highScores={highScores}
           snapshot={snapshot}
           onBackToMenu={handleBackToMenu}
-          onHighScoresChange={setHighScores}
           onNewGame={handleNewGame}
+          onSubmitHighScore={submitHighScore}
         />
       ) : (
         <RetroMenu
@@ -151,7 +129,7 @@ export function GameClient() {
           onNewGame={handleNewGame}
           onExit={handleExit}
           onBackToMenu={handleBackToMenu}
-          onHighScores={() => setPhase("highScores")}
+          onHighScores={handleHighScores}
         />
       )}
     </main>
@@ -186,6 +164,9 @@ function SpaceScene({
   const explosionIdRef = useRef(1);
   const shieldFlashIdRef = useRef(1);
   const gameOverTimerRef = useRef<number | null>(null);
+  const lastHudSnapshotRef = useRef<Snapshot>(simulation.getSnapshot());
+  const lastHudUpdateTimeRef = useRef(0);
+  const [sceneSnapshot, setSceneSnapshot] = useState(() => simulation.getSnapshot());
   const [explosions, setExplosions] = useState<Explosion[]>([]);
   const [shieldFlashes, setShieldFlashes] = useState<ShieldFlash[]>([]);
 
@@ -201,6 +182,11 @@ function SpaceScene({
   useFrame(({ clock }, delta) => {
     const snapshot = simulation.step(Math.min(delta, 0.05), actions);
     const blinkRemaining = blinkUntilRef.current - clock.elapsedTime;
+    const shouldPublishHudSnapshot =
+      clock.elapsedTime - lastHudUpdateTimeRef.current >= hudSnapshotInterval ||
+      hasHudSnapshotChanged(snapshot, lastHudSnapshotRef.current);
+
+    setSceneSnapshot(snapshot);
 
     if (playerRef.current) {
       playerRef.current.position.x = snapshot.player.x;
@@ -212,7 +198,12 @@ function SpaceScene({
         !playerDestroyedRef.current && (blinkRemaining <= 0 || Math.floor(blinkRemaining * 18) % 2 === 0);
     }
 
-    onSnapshot(snapshot);
+    if (shouldPublishHudSnapshot) {
+      lastHudSnapshotRef.current = snapshot;
+      lastHudUpdateTimeRef.current = clock.elapsedTime;
+      onSnapshot(snapshot);
+    }
+
     onTimeScaleChange(snapshot.timeScale);
 
     if (snapshot.events.length === 0) return;
@@ -255,6 +246,9 @@ function SpaceScene({
       if (event.type === "playerDestroyed" && !gameOverRef.current) {
         gameOverRef.current = true;
         playerDestroyedRef.current = true;
+        lastHudSnapshotRef.current = snapshot;
+        lastHudUpdateTimeRef.current = clock.elapsedTime;
+        onSnapshot(snapshot);
         onStopMusic();
         playExplosion("player");
         nextExplosions.push({
@@ -276,22 +270,20 @@ function SpaceScene({
     }
   });
 
-  const snapshot = simulation.getSnapshot();
-
   return (
     <>
       <Starfield />
-      <mesh ref={playerRef} position={[snapshot.player.x, snapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
+      <mesh ref={playerRef} position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
         <coneGeometry args={[0.29, 0.74, 3]} />
         <meshBasicMaterial ref={playerMaterialRef} color="#66e3ff" />
       </mesh>
-      {snapshot.shieldCharges > 0 ? (
-        <PlayerShield position={[snapshot.player.x, snapshot.player.y, 0.04]} charges={snapshot.shieldCharges} />
+      {sceneSnapshot.shieldCharges > 0 ? (
+        <PlayerShield position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0.04]} charges={sceneSnapshot.shieldCharges} />
       ) : null}
-      {snapshot.weaponPowerTimeRemaining > 0 ? (
-        <WeaponPowerAura position={[snapshot.player.x, snapshot.player.y, 0.05]} />
+      {sceneSnapshot.weaponPowerTimeRemaining > 0 ? (
+        <WeaponPowerAura position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0.05]} />
       ) : null}
-      {snapshot.projectiles.map((projectile) => (
+      {sceneSnapshot.projectiles.map((projectile) => (
         <mesh
           key={projectile.id}
           position={[projectile.x, projectile.y, 0]}
@@ -301,7 +293,7 @@ function SpaceScene({
           <meshBasicMaterial color="#ffbf69" />
         </mesh>
       ))}
-      {snapshot.enemies.map((enemy) =>
+      {sceneSnapshot.enemies.map((enemy) =>
         enemy.kind === "miniBoss" ? (
           <MiniBossEnemy key={enemy.id} enemy={enemy} />
         ) : (
@@ -311,16 +303,16 @@ function SpaceScene({
           </mesh>
         )
       )}
-      {snapshot.enemyBeams.map((beam) => (
+      {sceneSnapshot.enemyBeams.map((beam) => (
         <EnemyBeamEffect key={beam.id} y={beam.y} />
       ))}
-      {snapshot.enemyProjectiles.map((projectile) => (
+      {sceneSnapshot.enemyProjectiles.map((projectile) => (
         <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
           <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
           <meshBasicMaterial color="#ff5d73" />
         </mesh>
       ))}
-      {snapshot.powerUps.map((powerUp) => (
+      {sceneSnapshot.powerUps.map((powerUp) => (
         <PowerUpPickup key={powerUp.id} kind={powerUp.kind} position={[powerUp.x, powerUp.y, 0.06]} />
       ))}
       {explosions.map((explosion) => (
@@ -340,6 +332,15 @@ function SpaceScene({
         />
       ))}
     </>
+  );
+}
+
+function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
+  return (
+    next.score !== previous.score ||
+    next.wave !== previous.wave ||
+    next.health !== previous.health ||
+    next.maxHealth !== previous.maxHealth
   );
 }
 
@@ -694,312 +695,6 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
   );
 }
 
-function RetroMenu({
-  phase,
-  highScores,
-  onActivateAudio,
-  onNewGame,
-  onExit,
-  onBackToMenu,
-  onHighScores
-}: {
-  phase: "menu" | "exited" | "highScores";
-  highScores: HighScoreEntry[];
-  onActivateAudio: () => Promise<void>;
-  onNewGame: () => void;
-  onExit: () => void;
-  onBackToMenu: () => void;
-  onHighScores: () => void;
-}) {
-  const isExited = phase === "exited";
-  const isHighScores = phase === "highScores";
-
-  return (
-    <RetroScreen ariaLabel={isExited ? "Exited game" : isHighScores ? "High scores" : "Main menu"} onPointerDown={() => void onActivateAudio()}>
-      <div className={isHighScores ? "menu-stack high-scores-menu-stack" : "menu-stack"}>
-        <p className="menu-kicker">{isExited ? "System Offline" : isHighScores ? "Hall Of Fame" : "Insert Credit"}</p>
-        <h1 className="menu-title">Space Shooter</h1>
-        <p className="menu-status">{isExited ? "Game session ended" : isHighScores ? "Top pilots" : "Ready player one"}</p>
-
-        {isExited ? (
-          <div className="menu-actions" aria-label="Exited actions">
-            <button className="menu-button is-primary" type="button" onClick={onBackToMenu}>
-              Back To Menu
-            </button>
-          </div>
-        ) : isHighScores ? (
-          <>
-            <HighScoreBoard scores={highScores} />
-            <div className="menu-actions" aria-label="High score actions">
-              <button className="menu-button is-primary" type="button" onClick={onBackToMenu}>
-                Back To Menu
-              </button>
-            </div>
-          </>
-        ) : (
-          <div className="menu-actions" aria-label="Main menu actions">
-            <button className="menu-button is-primary" type="button" onClick={onNewGame}>
-              New Game
-            </button>
-            <button className="menu-button" type="button" onClick={onHighScores}>
-              High Scores
-            </button>
-            <button className="menu-button" type="button" aria-disabled="true">
-              Select Level
-            </button>
-            <button className="menu-button" type="button" aria-disabled="true">
-              Options
-            </button>
-            <button className="menu-button" type="button" onClick={onExit}>
-              Exit
-            </button>
-          </div>
-        )}
-      </div>
-    </RetroScreen>
-  );
-}
-
-function GameOverScreen({
-  highScores,
-  snapshot,
-  onBackToMenu,
-  onHighScoresChange,
-  onNewGame
-}: {
-  highScores: HighScoreEntry[];
-  snapshot: Snapshot;
-  onBackToMenu: () => void;
-  onHighScoresChange: (scores: HighScoreEntry[]) => void;
-  onNewGame: () => void;
-}) {
-  const [playerName, setPlayerName] = useState("YOU");
-  const [submittedScoreId, setSubmittedScoreId] = useState<string | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const qualifiesForTopThree = qualifiesForHighScores(snapshot.score, highScores);
-  const playerScore: DisplayHighScoreEntry = {
-    id: submittedScoreId ?? "current-player",
-    name: playerName.trim() || "YOU",
-    score: snapshot.score,
-    isPlayer: true
-  };
-  const survivedTime = formatSurvivalTime(snapshot.elapsedTime);
-  const displayedScores: DisplayHighScoreEntry[] = submittedScoreId
-    ? highScores.map((entry) => ({
-        ...entry,
-        isPlayer: entry.id === submittedScoreId
-      }))
-    : qualifiesForTopThree
-    ? sortHighScores([...highScores, playerScore])
-    : highScores;
-  const submittedScoreIsVisible = displayedScores.some((entry) => entry.id === submittedScoreId);
-
-  const handleSubmitScore = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (isSubmitting || submittedScoreId) return;
-
-    setIsSubmitting(true);
-    setSubmitError(null);
-
-    try {
-      const response = await fetch("/api/high-scores", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          name: playerName,
-          score: snapshot.score
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error("Score submission failed");
-      }
-
-      const result = (await response.json()) as HighScoresResponse;
-      const nextHighScores = parseHighScoresResponse(result.scores);
-      const submittedScore = parseSubmittedScore(result.submittedScore);
-
-      onHighScoresChange(nextHighScores);
-      setSubmittedScoreId(submittedScore?.id ?? null);
-      setPlayerName(submittedScore?.name ?? playerName);
-    } catch {
-      setSubmitError("Score link failed. Static board restored.");
-      onHighScoresChange(staticHighScores);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <RetroScreen ariaLabel="Game over">
-      <div className="menu-stack game-over-stack">
-        <p className="menu-kicker">{qualifiesForTopThree ? "Mission Complete" : "Signal Lost"}</p>
-        <h1 className="menu-title">Game Over</h1>
-        <div className="final-run-stats" aria-label="Final run stats">
-          <p>
-            Final Score <span>{snapshot.score}</span>
-          </p>
-          <p>
-            Time Survived <span>{survivedTime}</span>
-          </p>
-        </div>
-
-        <HighScoreBoard
-          scores={displayedScores}
-          footer={
-            <>
-              {!qualifiesForTopThree ? (
-                <p className="player-score-note">
-                  Your Score <span>{snapshot.score}</span>
-                </p>
-              ) : null}
-              {submittedScoreId && !submittedScoreIsVisible ? (
-                <p className="player-score-note">
-                  Score Saved <span>{snapshot.score}</span>
-                </p>
-              ) : null}
-            </>
-          }
-        />
-
-        {!submittedScoreId ? (
-          <form className="score-submit-form" aria-label="Submit high score" onSubmit={handleSubmitScore}>
-            <label className="score-submit-label" htmlFor="player-name">
-              Pilot Name
-            </label>
-            <div className="score-submit-row">
-              <input
-                id="player-name"
-                className="score-submit-input"
-                type="text"
-                value={playerName}
-                maxLength={MAX_HIGH_SCORE_NAME_LENGTH}
-                autoComplete="off"
-                inputMode="text"
-                onChange={(event) => setPlayerName(event.target.value)}
-              />
-              <button className="menu-button is-primary score-submit-button" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving" : "Submit"}
-              </button>
-            </div>
-            {submitError ? <p className="score-submit-error">{submitError}</p> : null}
-          </form>
-        ) : null}
-
-        <div className="menu-actions" aria-label="Game over actions">
-          <button className="menu-button is-primary" type="button" onClick={onNewGame}>
-            New Game
-          </button>
-          <button className="menu-button" type="button" onClick={onBackToMenu}>
-            Back To Menu
-          </button>
-        </div>
-      </div>
-    </RetroScreen>
-  );
-}
-
-function HighScoreBoard({ footer, scores }: { footer?: React.ReactNode; scores: DisplayHighScoreEntry[] }) {
-  return (
-    <div className="high-score-board" aria-label="High scores">
-      <p className="high-score-heading">High Scores</p>
-      <ol className="high-score-list">
-        {scores.map((entry, index) => (
-          <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={entry.id ?? `${entry.name}-${index}`}>
-            <span className="high-score-rank">{index + 1}</span>
-            <span className="high-score-name">{entry.name}</span>
-            <span className="high-score-value">{entry.score}</span>
-          </li>
-        ))}
-      </ol>
-      {footer}
-    </div>
-  );
-}
-
-function formatSurvivalTime(seconds: number) {
-  const totalSeconds = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(totalSeconds / 60);
-  const remainingSeconds = totalSeconds % 60;
-
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
-
-type HighScoresResponse = {
-  scores?: unknown;
-  submittedScore?: unknown;
-};
-
-async function fetchHighScores() {
-  try {
-    const response = await fetch("/api/high-scores");
-
-    if (!response.ok) {
-      return staticHighScores;
-    }
-
-    const result = (await response.json()) as HighScoresResponse;
-
-    return parseHighScoresResponse(result.scores);
-  } catch {
-    return staticHighScores;
-  }
-}
-
-function parseHighScoresResponse(scores: unknown) {
-  if (!Array.isArray(scores)) return staticHighScores;
-
-  const parsedScores = scores
-    .map(parseSubmittedScore)
-    .filter((score): score is HighScoreEntry => Boolean(score));
-
-  return parsedScores.length > 0 ? sortHighScores(parsedScores) : staticHighScores;
-}
-
-function parseSubmittedScore(score: unknown): HighScoreEntry | null {
-  if (!score || typeof score !== "object") return null;
-
-  const entry = score as { id?: unknown; name?: unknown; score?: unknown };
-
-  if (typeof entry.name !== "string" || typeof entry.score !== "number" || !Number.isFinite(entry.score)) {
-    return null;
-  }
-
-  return {
-    id: typeof entry.id === "string" ? entry.id : undefined,
-    name: entry.name,
-    score: Math.max(0, Math.floor(entry.score))
-  };
-}
-
-function RetroScreen({
-  ariaLabel,
-  children,
-  onPointerDown
-}: {
-  ariaLabel: string;
-  children: React.ReactNode;
-  onPointerDown?: () => void;
-}) {
-  return (
-    <section className="retro-screen" aria-label={ariaLabel} onPointerDown={onPointerDown}>
-      <div className="retro-stars" aria-hidden="true" />
-      <div className="pixel-ship pixel-ship-alpha" aria-hidden="true" />
-      <div className="pixel-ship pixel-ship-beta" aria-hidden="true" />
-      <div className="laser laser-alpha" aria-hidden="true" />
-      <div className="laser laser-beta" aria-hidden="true" />
-      <div className="pixel-boom boom-alpha" aria-hidden="true" />
-      <div className="pixel-boom boom-beta" aria-hidden="true" />
-      <div className="scanlines" aria-hidden="true" />
-      {children}
-    </section>
-  );
-}
-
 function useKeyboardActions(active: boolean) {
   const actions = useRef<ActionState>({
     left: false,
@@ -1050,234 +745,6 @@ function useKeyboardActions(active: boolean) {
   return actions;
 }
 
-function useEightBitMusic() {
-  const audioRef = useRef<AudioContext | null>(null);
-  const gainRef = useRef<GainNode | null>(null);
-  const gainConnectedRef = useRef(false);
-  const intensityRef = useRef(1);
-  const noteIndexRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-  const resultTimerRef = useRef<number[]>([]);
-  const melody = useMemo(
-    () => [330, 392, 494, 392, 523, 494, 392, 294, 330, 392, 440, 392, 330, 262, 294, 330],
-    []
-  );
-
-  const getMusicInterval = () => {
-    const progress = clamp01(intensityRef.current - 1);
-    return 220 - progress * 75;
-  };
-
-  const getMusicVolume = () => {
-    const progress = clamp01(intensityRef.current - 1);
-    return 0.055 + progress * 0.025;
-  };
-
-  const getMusicGain = (context: AudioContext) => {
-    const gain = gainRef.current ?? context.createGain();
-    gainRef.current = gain;
-
-    if (!gainConnectedRef.current) {
-      gain.connect(context.destination);
-      gainConnectedRef.current = true;
-    }
-
-    return gain;
-  };
-
-  const stop = () => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-
-    for (const timer of resultTimerRef.current) {
-      window.clearTimeout(timer);
-    }
-    resultTimerRef.current = [];
-    noteIndexRef.current = 0;
-
-    gainRef.current?.gain.cancelScheduledValues(0);
-    gainRef.current?.gain.setValueAtTime(0, audioRef.current?.currentTime ?? 0);
-  };
-
-  const setIntensity = (timeScale: number) => {
-    const nextIntensity = Math.min(Math.max(timeScale, 1), 2);
-    intensityRef.current = nextIntensity;
-
-    const context = audioRef.current;
-    if (!context || !gainRef.current || timerRef.current === null) return;
-
-    gainRef.current.gain.cancelScheduledValues(context.currentTime);
-    gainRef.current.gain.linearRampToValueAtTime(getMusicVolume(), context.currentTime + 0.08);
-  };
-
-  const start = async () => {
-    if (timerRef.current !== null) return;
-
-    const context = getAudioContext(audioRef);
-    if (!context) return;
-
-    if (context.state === "suspended") {
-      await context.resume();
-    }
-
-    const gain = getMusicGain(context);
-    gain.gain.setValueAtTime(getMusicVolume(), context.currentTime);
-
-    const playNote = () => {
-      const now = context.currentTime;
-      const oscillator = context.createOscillator();
-      const noteGain = context.createGain();
-      const intensityProgress = clamp01(intensityRef.current - 1);
-      const melodyIndex = noteIndexRef.current % melody.length;
-      const shouldLiftOctave = intensityProgress > 0.58 && noteIndexRef.current % 4 === 0;
-      const frequency = melody[melodyIndex] * (shouldLiftOctave ? 2 : 1);
-
-      oscillator.type = "square";
-      oscillator.frequency.setValueAtTime(frequency, now);
-      noteGain.gain.setValueAtTime(0, now);
-      noteGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
-      noteGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-      oscillator.connect(noteGain);
-      noteGain.connect(gain);
-      oscillator.start(now);
-      oscillator.stop(now + 0.2);
-
-      noteIndexRef.current += 1;
-      timerRef.current = window.setTimeout(playNote, getMusicInterval());
-    };
-
-    playNote();
-  };
-
-  const playResultTune = async (kind: ResultTune) => {
-    stop();
-
-    const context = getAudioContext(audioRef);
-    if (!context) return;
-
-    if (context.state === "suspended") {
-      await context.resume();
-    }
-
-    const gain = getMusicGain(context);
-    gain.gain.setValueAtTime(0.065, context.currentTime);
-
-    const notes = kind === "happy" ? [392, 494, 587, 784, 988] : [392, 349, 294, 247, 196];
-    const noteLength = kind === "happy" ? 0.16 : 0.22;
-
-    resultTimerRef.current = notes.map((frequency, index) =>
-      window.setTimeout(() => {
-        const now = context.currentTime;
-        const oscillator = context.createOscillator();
-        const noteGain = context.createGain();
-
-        oscillator.type = kind === "happy" ? "square" : "triangle";
-        oscillator.frequency.setValueAtTime(frequency, now);
-        noteGain.gain.setValueAtTime(0, now);
-        noteGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
-        noteGain.gain.exponentialRampToValueAtTime(0.001, now + noteLength);
-        oscillator.connect(noteGain);
-        noteGain.connect(gain);
-        oscillator.start(now);
-        oscillator.stop(now + noteLength + 0.02);
-      }, index * 170)
-    );
-  };
-
-  const playPew = () => {
-    const context = getAudioContext(audioRef);
-    if (!context) return;
-
-    if (context.state === "suspended") {
-      void context.resume();
-    }
-
-    const now = context.currentTime;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(1160, now);
-    oscillator.frequency.exponentialRampToValueAtTime(520, now + 0.08);
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.12, now + 0.006);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(now);
-    oscillator.stop(now + 0.11);
-  };
-
-  const playBuzz = () => {
-    const context = getAudioContext(audioRef);
-    if (!context) return;
-
-    if (context.state === "suspended") {
-      void context.resume();
-    }
-
-    const now = context.currentTime;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(150, now);
-    oscillator.frequency.setValueAtTime(120, now + 0.045);
-    oscillator.frequency.setValueAtTime(150, now + 0.09);
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.16, now + 0.008);
-    gain.gain.setValueAtTime(0.16, now + 0.11);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(now);
-    oscillator.stop(now + 0.18);
-  };
-
-  const playExplosion = (kind: ExplosionKind) => {
-    const context = getAudioContext(audioRef);
-    if (!context) return;
-
-    if (context.state === "suspended") {
-      void context.resume();
-    }
-
-    const now = context.currentTime;
-    const duration = kind === "player" ? 0.42 : 0.24;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-
-    oscillator.type = "sawtooth";
-    oscillator.frequency.setValueAtTime(kind === "player" ? 220 : 360, now);
-    oscillator.frequency.exponentialRampToValueAtTime(kind === "player" ? 42 : 95, now + duration);
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(kind === "player" ? 0.24 : 0.14, now + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(now);
-    oscillator.stop(now + duration + 0.02);
-  };
-
-  useEffect(() => stop, []);
-
-  return { playBuzz, playExplosion, playPew, playResultTune, setIntensity, start, stop };
-}
-
-function getAudioContext(audioRef: React.MutableRefObject<AudioContext | null>) {
-  if (audioRef.current) return audioRef.current;
-
-  const AudioContextConstructor =
-    window.AudioContext ??
-    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextConstructor) return null;
-
-  audioRef.current = new AudioContextConstructor();
-  return audioRef.current;
-}
-
 function seededRange(seed: number, min: number, max: number) {
   return min + seededUnit(seed) * (max - min);
 }
@@ -1288,8 +755,4 @@ function seededUnit(seed: number) {
 
 function fract(value: number) {
   return value - Math.floor(value);
-}
-
-function clamp01(value: number) {
-  return Math.min(Math.max(value, 0), 1);
 }
