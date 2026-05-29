@@ -13,7 +13,7 @@ import {
   type HighScoreEntry
 } from "@/lib/highScores";
 
-type GamePhase = "menu" | "playing" | "gameOver" | "exited";
+type GamePhase = "menu" | "playing" | "gameOver" | "exited" | "highScores";
 type ResultTune = "happy" | "sad";
 type DisplayHighScoreEntry = HighScoreEntry & {
   isPlayer?: boolean;
@@ -146,10 +146,12 @@ export function GameClient() {
       ) : (
         <RetroMenu
           phase={phase}
+          highScores={highScores}
           onActivateAudio={music.start}
           onNewGame={handleNewGame}
           onExit={handleExit}
           onBackToMenu={handleBackToMenu}
+          onHighScores={() => setPhase("highScores")}
         />
       )}
     </main>
@@ -694,25 +696,30 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
 
 function RetroMenu({
   phase,
+  highScores,
   onActivateAudio,
   onNewGame,
   onExit,
-  onBackToMenu
+  onBackToMenu,
+  onHighScores
 }: {
-  phase: "menu" | "exited";
+  phase: "menu" | "exited" | "highScores";
+  highScores: HighScoreEntry[];
   onActivateAudio: () => Promise<void>;
   onNewGame: () => void;
   onExit: () => void;
   onBackToMenu: () => void;
+  onHighScores: () => void;
 }) {
   const isExited = phase === "exited";
+  const isHighScores = phase === "highScores";
 
   return (
-    <RetroScreen ariaLabel={isExited ? "Exited game" : "Main menu"} onPointerDown={() => void onActivateAudio()}>
-      <div className="menu-stack">
-        <p className="menu-kicker">{isExited ? "System Offline" : "Insert Credit"}</p>
+    <RetroScreen ariaLabel={isExited ? "Exited game" : isHighScores ? "High scores" : "Main menu"} onPointerDown={() => void onActivateAudio()}>
+      <div className={isHighScores ? "menu-stack high-scores-menu-stack" : "menu-stack"}>
+        <p className="menu-kicker">{isExited ? "System Offline" : isHighScores ? "Hall Of Fame" : "Insert Credit"}</p>
         <h1 className="menu-title">Space Shooter</h1>
-        <p className="menu-status">{isExited ? "Game session ended" : "Ready player one"}</p>
+        <p className="menu-status">{isExited ? "Game session ended" : isHighScores ? "Top pilots" : "Ready player one"}</p>
 
         {isExited ? (
           <div className="menu-actions" aria-label="Exited actions">
@@ -720,10 +727,22 @@ function RetroMenu({
               Back To Menu
             </button>
           </div>
+        ) : isHighScores ? (
+          <>
+            <HighScoreBoard scores={highScores} />
+            <div className="menu-actions" aria-label="High score actions">
+              <button className="menu-button is-primary" type="button" onClick={onBackToMenu}>
+                Back To Menu
+              </button>
+            </div>
+          </>
         ) : (
           <div className="menu-actions" aria-label="Main menu actions">
             <button className="menu-button is-primary" type="button" onClick={onNewGame}>
               New Game
+            </button>
+            <button className="menu-button" type="button" onClick={onHighScores}>
+              High Scores
             </button>
             <button className="menu-button" type="button" aria-disabled="true">
               Select Level
@@ -829,28 +848,23 @@ function GameOverScreen({
           </p>
         </div>
 
-        <div className="high-score-board" aria-label="High scores">
-          <p className="high-score-heading">High Scores</p>
-          <ol className="high-score-list">
-            {displayedScores.map((entry, index) => (
-              <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={entry.id ?? `${entry.name}-${index}`}>
-                <span className="high-score-rank">{index + 1}</span>
-                <span className="high-score-name">{entry.name}</span>
-                <span className="high-score-value">{entry.score}</span>
-              </li>
-            ))}
-          </ol>
-          {!qualifiesForTopThree ? (
-            <p className="player-score-note">
-              Your Score <span>{snapshot.score}</span>
-            </p>
-          ) : null}
-          {submittedScoreId && !submittedScoreIsVisible ? (
-            <p className="player-score-note">
-              Score Saved <span>{snapshot.score}</span>
-            </p>
-          ) : null}
-        </div>
+        <HighScoreBoard
+          scores={displayedScores}
+          footer={
+            <>
+              {!qualifiesForTopThree ? (
+                <p className="player-score-note">
+                  Your Score <span>{snapshot.score}</span>
+                </p>
+              ) : null}
+              {submittedScoreId && !submittedScoreIsVisible ? (
+                <p className="player-score-note">
+                  Score Saved <span>{snapshot.score}</span>
+                </p>
+              ) : null}
+            </>
+          }
+        />
 
         {!submittedScoreId ? (
           <form className="score-submit-form" aria-label="Submit high score" onSubmit={handleSubmitScore}>
@@ -886,6 +900,24 @@ function GameOverScreen({
         </div>
       </div>
     </RetroScreen>
+  );
+}
+
+function HighScoreBoard({ footer, scores }: { footer?: React.ReactNode; scores: DisplayHighScoreEntry[] }) {
+  return (
+    <div className="high-score-board" aria-label="High scores">
+      <p className="high-score-heading">High Scores</p>
+      <ol className="high-score-list">
+        {scores.map((entry, index) => (
+          <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={entry.id ?? `${entry.name}-${index}`}>
+            <span className="high-score-rank">{index + 1}</span>
+            <span className="high-score-name">{entry.name}</span>
+            <span className="high-score-value">{entry.score}</span>
+          </li>
+        ))}
+      </ol>
+      {footer}
+    </div>
   );
 }
 

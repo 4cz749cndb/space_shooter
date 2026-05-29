@@ -261,6 +261,10 @@ select {
   width: min(500px, calc(100vw - 32px));
 }
 
+.high-scores-menu-stack {
+  width: min(500px, calc(100vw - 32px));
+}
+
 .final-run-stats {
   display: grid;
   gap: 8px;

@@ -19,17 +19,34 @@ type StoredHighScore = {
 };
 
 function canUsePersistentHighScores() {
+  const hasUpstashEnv = Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
+  const hasKvEnv = Boolean(process.env.KV_REST_API_URL) && Boolean(process.env.KV_REST_API_TOKEN);
+
+  return process.env.NODE_ENV === "production" && (hasUpstashEnv || hasKvEnv);
+}
+
+function getRedisConfig() {
   return (
-    process.env.NODE_ENV === "production" &&
-    Boolean(process.env.UPSTASH_REDIS_REST_URL) &&
-    Boolean(process.env.UPSTASH_REDIS_REST_TOKEN)
+    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+      ? {
+          url: process.env.UPSTASH_REDIS_REST_URL,
+          token: process.env.UPSTASH_REDIS_REST_TOKEN
+        }
+      : {
+          url: process.env.KV_REST_API_URL,
+          token: process.env.KV_REST_API_TOKEN
+        }
   );
 }
 
 function getRedis() {
   if (!canUsePersistentHighScores()) return null;
 
-  return Redis.fromEnv();
+  const config = getRedisConfig();
+
+  if (!config.url || !config.token) return null;
+
+  return new Redis(config);
 }
 
 async function getTopHighScores(): Promise<HighScoreEntry[]> {
@@ -58,7 +75,7 @@ async function getTopHighScores(): Promise<HighScoreEntry[]> {
       }
     }
 
-    return scores.length > 0 ? sortHighScores(scores) : staticHighScores;
+    return sortHighScores([...staticHighScores, ...scores]);
   } catch (error) {
     console.error("Failed to read high scores", error);
     return staticHighScores;
