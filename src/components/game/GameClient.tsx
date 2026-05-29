@@ -31,7 +31,10 @@ const initialSnapshot: Snapshot = {
   player: { x: -2.8, y: 0 },
   projectiles: [],
   enemies: [],
+  enemyProjectiles: [],
+  elapsedTime: 0,
   score: 0,
+  timeScale: 1,
   wave: 1,
   health: 5,
   maxHealth: 5,
@@ -47,6 +50,7 @@ export function GameClient() {
 
   const handleNewGame = () => {
     music.stop();
+    music.setIntensity(1);
     void music.start();
     setSnapshot(initialSnapshot);
     setGameKey((key) => key + 1);
@@ -55,6 +59,7 @@ export function GameClient() {
 
   const handleExit = () => {
     music.stop();
+    music.setIntensity(1);
     setSnapshot(initialSnapshot);
     setPhase("exited");
   };
@@ -63,6 +68,7 @@ export function GameClient() {
     const qualifiesForTopThree = finalSnapshot.score > highScores[2].score;
 
     music.stop();
+    music.setIntensity(1);
     setSnapshot(finalSnapshot);
     setPhase("gameOver");
     void music.playResultTune(qualifiesForTopThree ? "happy" : "sad");
@@ -70,6 +76,7 @@ export function GameClient() {
 
   const handleBackToMenu = () => {
     music.stop();
+    music.setIntensity(1);
     setSnapshot(initialSnapshot);
     setPhase("menu");
   };
@@ -88,6 +95,7 @@ export function GameClient() {
                 actions={actions.current}
                 onGameOver={handleGameOver}
                 onSnapshot={setSnapshot}
+                onTimeScaleChange={music.setIntensity}
                 onStopMusic={music.stop}
                 playBuzz={music.playBuzz}
                 playExplosion={music.playExplosion}
@@ -116,6 +124,7 @@ function SpaceScene({
   actions,
   onGameOver,
   onSnapshot,
+  onTimeScaleChange,
   onStopMusic,
   playBuzz,
   playExplosion,
@@ -124,6 +133,7 @@ function SpaceScene({
   actions: ActionState;
   onGameOver: (snapshot: Snapshot) => void;
   onSnapshot: (snapshot: Snapshot) => void;
+  onTimeScaleChange: (timeScale: number) => void;
   onStopMusic: () => void;
   playBuzz: () => void;
   playExplosion: (kind: ExplosionKind) => void;
@@ -163,6 +173,7 @@ function SpaceScene({
     }
 
     onSnapshot(snapshot);
+    onTimeScaleChange(snapshot.timeScale);
 
     if (snapshot.events.length === 0) return;
 
@@ -228,7 +239,13 @@ function SpaceScene({
       ))}
       {snapshot.enemies.map((enemy) => (
         <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
-          <octahedronGeometry args={[0.26, 0]} />
+          {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
+          <meshBasicMaterial color={enemy.kind === "sineGunner" ? "#8cff98" : "#ff5d73"} />
+        </mesh>
+      ))}
+      {snapshot.enemyProjectiles.map((projectile) => (
+        <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
+          <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
           <meshBasicMaterial color="#ff5d73" />
         </mesh>
       ))}
@@ -547,8 +564,24 @@ function useEightBitMusic() {
   const audioRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const gainConnectedRef = useRef(false);
+  const intensityRef = useRef(1);
+  const noteIndexRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const resultTimerRef = useRef<number[]>([]);
+  const melody = useMemo(
+    () => [330, 392, 494, 392, 523, 494, 392, 294, 330, 392, 440, 392, 330, 262, 294, 330],
+    []
+  );
+
+  const getMusicInterval = () => {
+    const progress = clamp01(intensityRef.current - 1);
+    return 220 - progress * 75;
+  };
+
+  const getMusicVolume = () => {
+    const progress = clamp01(intensityRef.current - 1);
+    return 0.055 + progress * 0.025;
+  };
 
   const getMusicGain = (context: AudioContext) => {
     const gain = gainRef.current ?? context.createGain();
@@ -564,7 +597,7 @@ function useEightBitMusic() {
 
   const stop = () => {
     if (timerRef.current !== null) {
-      window.clearInterval(timerRef.current);
+      window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
 
@@ -572,9 +605,21 @@ function useEightBitMusic() {
       window.clearTimeout(timer);
     }
     resultTimerRef.current = [];
+    noteIndexRef.current = 0;
 
     gainRef.current?.gain.cancelScheduledValues(0);
     gainRef.current?.gain.setValueAtTime(0, audioRef.current?.currentTime ?? 0);
+  };
+
+  const setIntensity = (timeScale: number) => {
+    const nextIntensity = Math.min(Math.max(timeScale, 1), 2);
+    intensityRef.current = nextIntensity;
+
+    const context = audioRef.current;
+    if (!context || !gainRef.current || timerRef.current === null) return;
+
+    gainRef.current.gain.cancelScheduledValues(context.currentTime);
+    gainRef.current.gain.linearRampToValueAtTime(getMusicVolume(), context.currentTime + 0.08);
   };
 
   const start = async () => {
@@ -588,18 +633,19 @@ function useEightBitMusic() {
     }
 
     const gain = getMusicGain(context);
-    gain.gain.setValueAtTime(0.055, context.currentTime);
-
-    const melody = [330, 392, 494, 392, 523, 494, 392, 294, 330, 392, 440, 392, 330, 262, 294, 330];
-    let noteIndex = 0;
+    gain.gain.setValueAtTime(getMusicVolume(), context.currentTime);
 
     const playNote = () => {
       const now = context.currentTime;
       const oscillator = context.createOscillator();
       const noteGain = context.createGain();
+      const intensityProgress = clamp01(intensityRef.current - 1);
+      const melodyIndex = noteIndexRef.current % melody.length;
+      const shouldLiftOctave = intensityProgress > 0.58 && noteIndexRef.current % 4 === 0;
+      const frequency = melody[melodyIndex] * (shouldLiftOctave ? 2 : 1);
 
       oscillator.type = "square";
-      oscillator.frequency.setValueAtTime(melody[noteIndex % melody.length], now);
+      oscillator.frequency.setValueAtTime(frequency, now);
       noteGain.gain.setValueAtTime(0, now);
       noteGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
       noteGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
@@ -608,11 +654,11 @@ function useEightBitMusic() {
       oscillator.start(now);
       oscillator.stop(now + 0.2);
 
-      noteIndex += 1;
+      noteIndexRef.current += 1;
+      timerRef.current = window.setTimeout(playNote, getMusicInterval());
     };
 
     playNote();
-    timerRef.current = window.setInterval(playNote, 220);
   };
 
   const playResultTune = async (kind: ResultTune) => {
@@ -727,7 +773,7 @@ function useEightBitMusic() {
 
   useEffect(() => stop, []);
 
-  return { playBuzz, playExplosion, playPew, playResultTune, start, stop };
+  return { playBuzz, playExplosion, playPew, playResultTune, setIntensity, start, stop };
 }
 
 function getAudioContext(audioRef: React.MutableRefObject<AudioContext | null>) {
@@ -752,4 +798,8 @@ function seededUnit(seed: number) {
 
 function fract(value: number) {
   return value - Math.floor(value);
+}
+
+function clamp01(value: number) {
+  return Math.min(Math.max(value, 0), 1);
 }
