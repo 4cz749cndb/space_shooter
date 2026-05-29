@@ -4,7 +4,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
-import type { ActionState, Snapshot } from "@/game/simulation/types";
+import type { ActionState, PowerUpKind, Snapshot } from "@/game/simulation/types";
 
 type GamePhase = "menu" | "playing" | "gameOver" | "exited";
 type ResultTune = "happy" | "sad";
@@ -20,6 +20,12 @@ type Explosion = {
   x: number;
   y: number;
 };
+type ShieldFlash = {
+  id: number;
+  kind: PowerUpKind;
+  x: number;
+  y: number;
+};
 
 const highScores: HighScoreEntry[] = [
   { name: "ACE", score: 24 },
@@ -32,10 +38,13 @@ const initialSnapshot: Snapshot = {
   projectiles: [],
   enemies: [],
   enemyProjectiles: [],
+  powerUps: [],
   elapsedTime: 0,
   score: 0,
+  shieldCharges: 0,
   timeScale: 1,
   wave: 1,
+  weaponPowerTimeRemaining: 0,
   health: 5,
   maxHealth: 5,
   events: []
@@ -146,8 +155,10 @@ function SpaceScene({
   const playerDestroyedRef = useRef(false);
   const blinkUntilRef = useRef(0);
   const explosionIdRef = useRef(1);
+  const shieldFlashIdRef = useRef(1);
   const gameOverTimerRef = useRef<number | null>(null);
   const [explosions, setExplosions] = useState<Explosion[]>([]);
+  const [shieldFlashes, setShieldFlashes] = useState<ShieldFlash[]>([]);
 
   useEffect(
     () => () => {
@@ -178,6 +189,7 @@ function SpaceScene({
     if (snapshot.events.length === 0) return;
 
     const nextExplosions: Explosion[] = [];
+    const nextShieldFlashes: ShieldFlash[] = [];
 
     for (const event of snapshot.events) {
       if (event.type === "weaponFired") {
@@ -202,6 +214,15 @@ function SpaceScene({
         }
       }
 
+      if (event.type === "powerUpCollected" || event.type === "shieldBlockedHit") {
+        nextShieldFlashes.push({
+          id: shieldFlashIdRef.current++,
+          kind: event.type === "powerUpCollected" ? event.kind : "shield",
+          x: snapshot.player.x,
+          y: snapshot.player.y
+        });
+      }
+
       if (event.type === "playerDestroyed" && !gameOverRef.current) {
         gameOverRef.current = true;
         playerDestroyedRef.current = true;
@@ -220,6 +241,10 @@ function SpaceScene({
     if (nextExplosions.length > 0) {
       setExplosions((current) => [...current, ...nextExplosions]);
     }
+
+    if (nextShieldFlashes.length > 0) {
+      setShieldFlashes((current) => [...current, ...nextShieldFlashes]);
+    }
   });
 
   const snapshot = simulation.getSnapshot();
@@ -231,8 +256,18 @@ function SpaceScene({
         <coneGeometry args={[0.29, 0.74, 3]} />
         <meshBasicMaterial ref={playerMaterialRef} color="#66e3ff" />
       </mesh>
+      {snapshot.shieldCharges > 0 ? (
+        <PlayerShield position={[snapshot.player.x, snapshot.player.y, 0.04]} charges={snapshot.shieldCharges} />
+      ) : null}
+      {snapshot.weaponPowerTimeRemaining > 0 ? (
+        <WeaponPowerAura position={[snapshot.player.x, snapshot.player.y, 0.05]} />
+      ) : null}
       {snapshot.projectiles.map((projectile) => (
-        <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
+        <mesh
+          key={projectile.id}
+          position={[projectile.x, projectile.y, 0]}
+          rotation={[0, 0, Math.atan2(projectile.velocityY, projectile.velocityX) - Math.PI / 2]}
+        >
           <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
           <meshBasicMaterial color="#ffbf69" />
         </mesh>
@@ -249,6 +284,9 @@ function SpaceScene({
           <meshBasicMaterial color="#ff5d73" />
         </mesh>
       ))}
+      {snapshot.powerUps.map((powerUp) => (
+        <PowerUpPickup key={powerUp.id} kind={powerUp.kind} position={[powerUp.x, powerUp.y, 0.06]} />
+      ))}
       {explosions.map((explosion) => (
         <ExplosionEffect
           key={explosion.id}
@@ -257,8 +295,172 @@ function SpaceScene({
           onDone={() => setExplosions((current) => current.filter((item) => item.id !== explosion.id))}
         />
       ))}
+      {shieldFlashes.map((flash) => (
+        <PowerUpFlashEffect
+          key={flash.id}
+          kind={flash.kind}
+          position={[flash.x, flash.y, 0.1]}
+          onDone={() => setShieldFlashes((current) => current.filter((item) => item.id !== flash.id))}
+        />
+      ))}
     </>
   );
+}
+
+function PlayerShield({ charges, position }: { charges: number; position: [number, number, number] }) {
+  const groupRef = useRef<Group>(null);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+
+    const pulse = 1 + Math.sin(clock.elapsedTime * 6) * 0.05 + Math.min(charges - 1, 3) * 0.03;
+    groupRef.current.scale.setScalar(pulse);
+    groupRef.current.rotation.z += 0.025;
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.48, 0.54, 28]} />
+        <meshBasicMaterial color="#66e3ff" transparent opacity={0.5} />
+      </mesh>
+      <mesh>
+        <circleGeometry args={[0.5, 28]} />
+        <meshBasicMaterial color="#66e3ff" transparent opacity={0.08} />
+      </mesh>
+    </group>
+  );
+}
+
+function WeaponPowerAura({ position }: { position: [number, number, number] }) {
+  const groupRef = useRef<Group>(null);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+
+    groupRef.current.rotation.z = Math.sin(clock.elapsedTime * 8) * 0.08;
+    groupRef.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 10) * 0.04);
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.58, 0.64, 28]} />
+        <meshBasicMaterial color="#ffbf69" transparent opacity={0.38} />
+      </mesh>
+      <mesh position={[0.1, 0.38, 0]}>
+        <circleGeometry args={[0.06, 10]} />
+        <meshBasicMaterial color="#ffe66d" transparent opacity={0.86} />
+      </mesh>
+      <mesh position={[0.1, -0.38, 0]}>
+        <circleGeometry args={[0.06, 10]} />
+        <meshBasicMaterial color="#ffe66d" transparent opacity={0.86} />
+      </mesh>
+    </group>
+  );
+}
+
+function PowerUpPickup({ kind, position }: { kind: PowerUpKind; position: [number, number, number] }) {
+  const groupRef = useRef<Group>(null);
+
+  useFrame(({ clock }, delta) => {
+    if (!groupRef.current) return;
+
+    const pulse = 1 + Math.sin(clock.elapsedTime * 7) * 0.08;
+    groupRef.current.scale.setScalar(pulse);
+    groupRef.current.rotation.z += delta * 2.5;
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.2, 0.3, 24]} />
+        <meshBasicMaterial color={getPowerUpColor(kind)} transparent opacity={0.9} />
+      </mesh>
+      <mesh>
+        <circleGeometry args={[0.12, 16]} />
+        <meshBasicMaterial color="#eef7ff" transparent opacity={0.82} />
+      </mesh>
+      {kind === "shield" ? (
+        <mesh rotation={[0, 0, Math.PI / 4]}>
+          <boxGeometry args={[0.1, 0.34, 0.02]} />
+          <meshBasicMaterial color="#8cff98" transparent opacity={0.88} />
+        </mesh>
+      ) : kind === "health" ? (
+        <>
+          <mesh>
+            <boxGeometry args={[0.32, 0.09, 0.02]} />
+            <meshBasicMaterial color="#8cff98" transparent opacity={0.92} />
+          </mesh>
+          <mesh>
+            <boxGeometry args={[0.09, 0.32, 0.02]} />
+            <meshBasicMaterial color="#8cff98" transparent opacity={0.92} />
+          </mesh>
+        </>
+      ) : (
+        <>
+          <mesh rotation={[0, 0, Math.PI / 4]}>
+            <boxGeometry args={[0.1, 0.36, 0.02]} />
+            <meshBasicMaterial color="#ffbf69" transparent opacity={0.94} />
+          </mesh>
+          <mesh rotation={[0, 0, -Math.PI / 4]}>
+            <boxGeometry args={[0.1, 0.36, 0.02]} />
+            <meshBasicMaterial color="#ffe66d" transparent opacity={0.9} />
+          </mesh>
+        </>
+      )}
+    </group>
+  );
+}
+
+function PowerUpFlashEffect({
+  kind,
+  onDone,
+  position
+}: {
+  kind: PowerUpKind;
+  onDone: () => void;
+  position: [number, number, number];
+}) {
+  const groupRef = useRef<Group>(null);
+  const ageRef = useRef(0);
+  const doneRef = useRef(false);
+  const duration = 0.32;
+
+  useFrame((_, delta) => {
+    ageRef.current += delta;
+    const progress = Math.min(ageRef.current / duration, 1);
+
+    if (groupRef.current) {
+      groupRef.current.scale.setScalar(0.8 + progress * 0.8);
+    }
+
+    if (progress >= 1 && !doneRef.current) {
+      doneRef.current = true;
+      onDone();
+    }
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.42, 0.5, 28]} />
+        <meshBasicMaterial color={getPowerUpColor(kind)} transparent opacity={0.7} />
+      </mesh>
+      {kind !== "shield" ? (
+        <mesh>
+          <circleGeometry args={[0.24, 18]} />
+          <meshBasicMaterial color="#eef7ff" transparent opacity={0.22} />
+        </mesh>
+      ) : null}
+    </group>
+  );
+}
+
+function getPowerUpColor(kind: PowerUpKind) {
+  if (kind === "shield") return "#66e3ff";
+  if (kind === "health") return "#8cff98";
+  return "#ffbf69";
 }
 
 function ExplosionEffect({

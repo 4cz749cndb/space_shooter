@@ -13,6 +13,8 @@ export type Vector2 = {
 
 export type Projectile = Vector2 & {
   id: number;
+  velocityX: number;
+  velocityY: number;
 };
 
 export type EnemyKind = "basic" | "sineGunner";
@@ -32,6 +34,13 @@ export type EnemyProjectile = Vector2 & {
   velocityY: number;
 };
 
+export type PowerUpKind = "shield" | "health" | "weapon";
+
+export type PowerUp = Vector2 & {
+  id: number;
+  kind: PowerUpKind;
+};
+
 export type SimulationEvent =
   | {
       type: "weaponFired";
@@ -49,6 +58,18 @@ export type SimulationEvent =
   | {
       type: "playerDestroyed";
       position: Vector2;
+    }
+  | {
+      type: "powerUpCollected";
+      health: number;
+      kind: PowerUpKind;
+      position: Vector2;
+      shieldCharges: number;
+    }
+  | {
+      type: "shieldBlockedHit";
+      position: Vector2;
+      shieldCharges: number;
     };
 
 export type Snapshot = {
@@ -56,10 +77,13 @@ export type Snapshot = {
   projectiles: Projectile[];
   enemies: Enemy[];
   enemyProjectiles: EnemyProjectile[];
+  powerUps: PowerUp[];
   elapsedTime: number;
   score: number;
+  shieldCharges: number;
   timeScale: number;
   wave: number;
+  weaponPowerTimeRemaining: number;
   health: number;
   maxHealth: number;
   events: SimulationEvent[];
