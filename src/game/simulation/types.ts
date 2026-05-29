@@ -25,4 +25,6 @@ export type Snapshot = {
   enemies: Enemy[];
   score: number;
   wave: number;
+  health: number;
+  maxHealth: number;
 };

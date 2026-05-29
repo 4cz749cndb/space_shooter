@@ -6,14 +6,28 @@ import type { Mesh } from "three";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
 import type { ActionState, Snapshot } from "@/game/simulation/types";
 
-type GamePhase = "menu" | "playing" | "exited";
+type GamePhase = "menu" | "playing" | "gameOver" | "exited";
+type ResultTune = "happy" | "sad";
+type HighScoreEntry = {
+  name: string;
+  score: number;
+  isPlayer?: boolean;
+};
+
+const highScores: HighScoreEntry[] = [
+  { name: "ACE", score: 24 },
+  { name: "NOVA", score: 15 },
+  { name: "ZED", score: 8 }
+];
 
 const initialSnapshot: Snapshot = {
-  player: { x: 0, y: -2.4 },
+  player: { x: -2.8, y: 0 },
   projectiles: [],
   enemies: [],
   score: 0,
-  wave: 1
+  wave: 1,
+  health: 5,
+  maxHealth: 5
 };
 
 export function GameClient() {
@@ -24,6 +38,7 @@ export function GameClient() {
   const music = useEightBitMusic();
 
   const handleNewGame = () => {
+    music.stop();
     void music.start();
     setSnapshot(initialSnapshot);
     setGameKey((key) => key + 1);
@@ -36,7 +51,17 @@ export function GameClient() {
     setPhase("exited");
   };
 
+  const handleGameOver = (finalSnapshot: Snapshot) => {
+    const qualifiesForTopThree = finalSnapshot.score > highScores[2].score;
+
+    music.stop();
+    setSnapshot(finalSnapshot);
+    setPhase("gameOver");
+    void music.playResultTune(qualifiesForTopThree ? "happy" : "sad");
+  };
+
   const handleBackToMenu = () => {
+    music.stop();
     setSnapshot(initialSnapshot);
     setPhase("menu");
   };
@@ -50,11 +75,18 @@ export function GameClient() {
               <color attach="background" args={["#05070d"]} />
               <ambientLight intensity={1} />
               <pointLight position={[4, 4, 6]} intensity={2.2} color="#66e3ff" />
-              <SpaceScene key={gameKey} actions={actions.current} onSnapshot={setSnapshot} />
+              <SpaceScene
+                key={gameKey}
+                actions={actions.current}
+                onGameOver={handleGameOver}
+                onSnapshot={setSnapshot}
+              />
             </Canvas>
           </div>
           <Hud snapshot={snapshot} onExit={handleExit} />
         </>
+      ) : phase === "gameOver" ? (
+        <GameOverScreen snapshot={snapshot} onBackToMenu={handleBackToMenu} onNewGame={handleNewGame} />
       ) : (
         <RetroMenu
           phase={phase}
@@ -70,13 +102,16 @@ export function GameClient() {
 
 function SpaceScene({
   actions,
+  onGameOver,
   onSnapshot
 }: {
   actions: ActionState;
+  onGameOver: (snapshot: Snapshot) => void;
   onSnapshot: (snapshot: Snapshot) => void;
 }) {
   const simulation = useMemo(() => createSpaceShooterSimulation(), []);
   const playerRef = useRef<Mesh>(null);
+  const gameOverRef = useRef(false);
 
   useFrame((_, delta) => {
     const snapshot = simulation.step(Math.min(delta, 0.05), actions);
@@ -87,6 +122,11 @@ function SpaceScene({
     }
 
     onSnapshot(snapshot);
+
+    if (snapshot.health <= 0 && !gameOverRef.current) {
+      gameOverRef.current = true;
+      onGameOver(snapshot);
+    }
   });
 
   const snapshot = simulation.getSnapshot();
@@ -94,12 +134,12 @@ function SpaceScene({
   return (
     <>
       <Starfield />
-      <mesh ref={playerRef} position={[snapshot.player.x, snapshot.player.y, 0]}>
+      <mesh ref={playerRef} position={[snapshot.player.x, snapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
         <coneGeometry args={[0.36, 0.92, 3]} />
         <meshBasicMaterial color="#66e3ff" />
       </mesh>
       {snapshot.projectiles.map((projectile) => (
-        <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]}>
+        <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
           <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
           <meshBasicMaterial color="#ffbf69" />
         </mesh>
@@ -140,6 +180,8 @@ function Starfield() {
 }
 
 function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
+  const healthPercent = `${(snapshot.health / snapshot.maxHealth) * 100}%`;
+
   return (
     <section className="hud" aria-label="Game status">
       <div className="hud-top">
@@ -151,11 +193,29 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
           <p className="hud-label">Wave</p>
           <p className="hud-value">{snapshot.wave}</p>
         </div>
+        <div className="hud-panel hud-health">
+          <div className="hud-health-header">
+            <p className="hud-label">Health</p>
+            <p className="hud-health-count">
+              {snapshot.health}/{snapshot.maxHealth}
+            </p>
+          </div>
+          <div
+            className="health-bar"
+            role="meter"
+            aria-label="Player health"
+            aria-valuemin={0}
+            aria-valuemax={snapshot.maxHealth}
+            aria-valuenow={snapshot.health}
+          >
+            <div className="health-bar-fill" style={{ width: healthPercent }} />
+          </div>
+        </div>
         <button className="hud-exit" type="button" onClick={onExit}>
           Exit
         </button>
       </div>
-      <div className="hud-bottom">Move with WASD or arrows. Fire with Space.</div>
+      <div className="hud-bottom">Dodge incoming objects from the right. Move with WASD or arrows. Fire with Space.</div>
     </section>
   );
 }
@@ -167,7 +227,7 @@ function RetroMenu({
   onExit,
   onBackToMenu
 }: {
-  phase: Exclude<GamePhase, "playing">;
+  phase: "menu" | "exited";
   onActivateAudio: () => Promise<void>;
   onNewGame: () => void;
   onExit: () => void;
@@ -176,20 +236,7 @@ function RetroMenu({
   const isExited = phase === "exited";
 
   return (
-    <section
-      className="retro-screen"
-      aria-label={isExited ? "Exited game" : "Main menu"}
-      onPointerDown={() => void onActivateAudio()}
-    >
-      <div className="retro-stars" aria-hidden="true" />
-      <div className="pixel-ship pixel-ship-alpha" aria-hidden="true" />
-      <div className="pixel-ship pixel-ship-beta" aria-hidden="true" />
-      <div className="laser laser-alpha" aria-hidden="true" />
-      <div className="laser laser-beta" aria-hidden="true" />
-      <div className="pixel-boom boom-alpha" aria-hidden="true" />
-      <div className="pixel-boom boom-beta" aria-hidden="true" />
-      <div className="scanlines" aria-hidden="true" />
-
+    <RetroScreen ariaLabel={isExited ? "Exited game" : "Main menu"} onPointerDown={() => void onActivateAudio()}>
       <div className="menu-stack">
         <p className="menu-kicker">{isExited ? "System Offline" : "Insert Credit"}</p>
         <h1 className="menu-title">Space Shooter</h1>
@@ -218,6 +265,83 @@ function RetroMenu({
           </div>
         )}
       </div>
+    </RetroScreen>
+  );
+}
+
+function GameOverScreen({
+  snapshot,
+  onBackToMenu,
+  onNewGame
+}: {
+  snapshot: Snapshot;
+  onBackToMenu: () => void;
+  onNewGame: () => void;
+}) {
+  const qualifiesForTopThree = snapshot.score > highScores[2].score;
+  const playerScore: HighScoreEntry = { name: "YOU", score: snapshot.score, isPlayer: true };
+  const displayedScores = qualifiesForTopThree
+    ? [...highScores, playerScore].sort((a, b) => b.score - a.score).slice(0, 3)
+    : highScores;
+
+  return (
+    <RetroScreen ariaLabel="Game over">
+      <div className="menu-stack game-over-stack">
+        <p className="menu-kicker">{qualifiesForTopThree ? "Mission Complete" : "Signal Lost"}</p>
+        <h1 className="menu-title">Game Over</h1>
+        <p className="menu-status">Final Score: {snapshot.score}</p>
+
+        <div className="high-score-board" aria-label="High scores">
+          <p className="high-score-heading">High Scores</p>
+          <ol className="high-score-list">
+            {displayedScores.map((entry, index) => (
+              <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={`${entry.name}-${index}`}>
+                <span className="high-score-rank">{index + 1}</span>
+                <span className="high-score-name">{entry.name}</span>
+                <span className="high-score-value">{entry.score}</span>
+              </li>
+            ))}
+          </ol>
+          {!qualifiesForTopThree ? (
+            <p className="player-score-note">
+              Your Score <span>{snapshot.score}</span>
+            </p>
+          ) : null}
+        </div>
+
+        <div className="menu-actions" aria-label="Game over actions">
+          <button className="menu-button is-primary" type="button" onClick={onNewGame}>
+            New Game
+          </button>
+          <button className="menu-button" type="button" onClick={onBackToMenu}>
+            Back To Menu
+          </button>
+        </div>
+      </div>
+    </RetroScreen>
+  );
+}
+
+function RetroScreen({
+  ariaLabel,
+  children,
+  onPointerDown
+}: {
+  ariaLabel: string;
+  children: React.ReactNode;
+  onPointerDown?: () => void;
+}) {
+  return (
+    <section className="retro-screen" aria-label={ariaLabel} onPointerDown={onPointerDown}>
+      <div className="retro-stars" aria-hidden="true" />
+      <div className="pixel-ship pixel-ship-alpha" aria-hidden="true" />
+      <div className="pixel-ship pixel-ship-beta" aria-hidden="true" />
+      <div className="laser laser-alpha" aria-hidden="true" />
+      <div className="laser laser-beta" aria-hidden="true" />
+      <div className="pixel-boom boom-alpha" aria-hidden="true" />
+      <div className="pixel-boom boom-beta" aria-hidden="true" />
+      <div className="scanlines" aria-hidden="true" />
+      {children}
     </section>
   );
 }
@@ -276,12 +400,18 @@ function useEightBitMusic() {
   const audioRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const timerRef = useRef<number | null>(null);
+  const resultTimerRef = useRef<number[]>([]);
 
   const stop = () => {
     if (timerRef.current !== null) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
+
+    for (const timer of resultTimerRef.current) {
+      window.clearTimeout(timer);
+    }
+    resultTimerRef.current = [];
 
     gainRef.current?.gain.cancelScheduledValues(0);
     gainRef.current?.gain.setValueAtTime(0, audioRef.current?.currentTime ?? 0);
@@ -327,9 +457,46 @@ function useEightBitMusic() {
     timerRef.current = window.setInterval(playNote, 220);
   };
 
+  const playResultTune = async (kind: ResultTune) => {
+    stop();
+
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      await context.resume();
+    }
+
+    const gain = gainRef.current ?? context.createGain();
+    gainRef.current = gain;
+    gain.connect(context.destination);
+    gain.gain.setValueAtTime(0.065, context.currentTime);
+
+    const notes = kind === "happy" ? [392, 494, 587, 784, 988] : [392, 349, 294, 247, 196];
+    const noteLength = kind === "happy" ? 0.16 : 0.22;
+
+    resultTimerRef.current = notes.map((frequency, index) =>
+      window.setTimeout(() => {
+        const now = context.currentTime;
+        const oscillator = context.createOscillator();
+        const noteGain = context.createGain();
+
+        oscillator.type = kind === "happy" ? "square" : "triangle";
+        oscillator.frequency.setValueAtTime(frequency, now);
+        noteGain.gain.setValueAtTime(0, now);
+        noteGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
+        noteGain.gain.exponentialRampToValueAtTime(0.001, now + noteLength);
+        oscillator.connect(noteGain);
+        noteGain.connect(gain);
+        oscillator.start(now);
+        oscillator.stop(now + noteLength + 0.02);
+      }, index * 170)
+    );
+  };
+
   useEffect(() => stop, []);
 
-  return { start, stop };
+  return { playResultTune, start, stop };
 }
 
 function getAudioContext(audioRef: React.MutableRefObject<AudioContext | null>) {

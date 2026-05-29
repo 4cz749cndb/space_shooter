@@ -12,14 +12,16 @@ const projectileSpeed = 6.8;
 const enemySpeed = 1.15;
 const fireCooldown = 0.16;
 const spawnInterval = 0.85;
+const maxHealth = 5;
 
 export function createSpaceShooterSimulation() {
   let nextId = 1;
   let score = 0;
   let wave = 1;
+  let health = maxHealth;
   let fireTimer = 0;
   let spawnTimer = 0;
-  const player: Vector2 = { x: 0, y: -2.4 };
+  const player: Vector2 = { x: -2.8, y: 0 };
   const projectiles: Projectile[] = [];
   const enemies: Enemy[] = [];
 
@@ -28,7 +30,9 @@ export function createSpaceShooterSimulation() {
     projectiles: projectiles.map((projectile) => ({ ...projectile })),
     enemies: enemies.map((enemy) => ({ ...enemy })),
     score,
-    wave
+    wave,
+    health,
+    maxHealth
   });
 
   const step = (delta: number, actions: ActionState): Snapshot => {
@@ -44,20 +48,20 @@ export function createSpaceShooterSimulation() {
 
     if (actions.fire && fireTimer <= 0) {
       fireTimer = fireCooldown;
-      projectiles.push({ id: nextId++, x: player.x, y: player.y + 0.42 });
+      projectiles.push({ id: nextId++, x: player.x + 0.42, y: player.y });
     }
 
     if (spawnTimer <= 0) {
       spawnTimer = Math.max(0.32, spawnInterval - wave * 0.04);
-      enemies.push({ id: nextId++, x: randomRange(bounds.left + 0.2, bounds.right - 0.2), y: bounds.top + 0.4 });
+      enemies.push({ id: nextId++, x: bounds.right + 0.4, y: randomRange(bounds.bottom + 0.2, bounds.top - 0.2) });
     }
 
     for (const projectile of projectiles) {
-      projectile.y += projectileSpeed * delta;
+      projectile.x += projectileSpeed * delta;
     }
 
     for (const enemy of enemies) {
-      enemy.y -= (enemySpeed + wave * 0.08) * delta;
+      enemy.x -= (enemySpeed + wave * 0.08) * delta;
     }
 
     resolveCollisions();
@@ -70,6 +74,12 @@ export function createSpaceShooterSimulation() {
   const resolveCollisions = () => {
     for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex -= 1) {
       const enemy = enemies[enemyIndex];
+
+      if (distance(enemy, player) < 0.48) {
+        enemies.splice(enemyIndex, 1);
+        health = Math.max(0, health - 1);
+        continue;
+      }
 
       for (let projectileIndex = projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
         const projectile = projectiles[projectileIndex];
@@ -85,8 +95,8 @@ export function createSpaceShooterSimulation() {
   };
 
   const pruneOffscreen = () => {
-    removeWhere(projectiles, (projectile) => projectile.y > bounds.top + 0.8);
-    removeWhere(enemies, (enemy) => enemy.y < bounds.bottom - 0.8);
+    removeWhere(projectiles, (projectile) => projectile.x > bounds.right + 0.8);
+    removeWhere(enemies, (enemy) => enemy.x < bounds.left - 0.8);
   };
 
   return {
