@@ -1,4 +1,4 @@
-import type { ActionState, Enemy, Projectile, Snapshot, Vector2 } from "./types";
+import type { ActionState, Enemy, Projectile, SimulationEvent, Snapshot, Vector2 } from "./types";
 
 const bounds = {
   left: -3.6,
@@ -12,6 +12,8 @@ const projectileSpeed = 6.8;
 const enemySpeed = 1.15;
 const fireCooldown = 0.16;
 const spawnInterval = 0.85;
+const enemyProjectileHitRadius = 0.29;
+const playerEnemyHitRadius = 0.38;
 const maxHealth = 5;
 
 export function createSpaceShooterSimulation() {
@@ -25,17 +27,23 @@ export function createSpaceShooterSimulation() {
   const projectiles: Projectile[] = [];
   const enemies: Enemy[] = [];
 
-  const getSnapshot = (): Snapshot => ({
+  const getSnapshot = (events: SimulationEvent[] = []): Snapshot => ({
     player: { ...player },
     projectiles: projectiles.map((projectile) => ({ ...projectile })),
     enemies: enemies.map((enemy) => ({ ...enemy })),
     score,
     wave,
     health,
-    maxHealth
+    maxHealth,
+    events
   });
 
   const step = (delta: number, actions: ActionState): Snapshot => {
+    if (health <= 0) {
+      return getSnapshot();
+    }
+
+    const events: SimulationEvent[] = [];
     const horizontal = Number(actions.right) - Number(actions.left);
     const vertical = Number(actions.up) - Number(actions.down);
     const length = Math.hypot(horizontal, vertical) || 1;
@@ -48,7 +56,9 @@ export function createSpaceShooterSimulation() {
 
     if (actions.fire && fireTimer <= 0) {
       fireTimer = fireCooldown;
-      projectiles.push({ id: nextId++, x: player.x + 0.42, y: player.y });
+      const projectile = { id: nextId++, x: player.x + 0.42, y: player.y };
+      projectiles.push(projectile);
+      events.push({ type: "weaponFired", position: { x: projectile.x, y: projectile.y } });
     }
 
     if (spawnTimer <= 0) {
@@ -64,30 +74,39 @@ export function createSpaceShooterSimulation() {
       enemy.x -= (enemySpeed + wave * 0.08) * delta;
     }
 
-    resolveCollisions();
+    resolveCollisions(events);
     pruneOffscreen();
     wave = Math.floor(score / 12) + 1;
 
-    return getSnapshot();
+    return getSnapshot(events);
   };
 
-  const resolveCollisions = () => {
+  const resolveCollisions = (events: SimulationEvent[]) => {
     for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex -= 1) {
       const enemy = enemies[enemyIndex];
 
-      if (distance(enemy, player) < 0.48) {
+      if (distance(enemy, player) < playerEnemyHitRadius) {
         enemies.splice(enemyIndex, 1);
+        const previousHealth = health;
         health = Math.max(0, health - 1);
+        events.push({ type: "playerHit", health, position: { ...player } });
+
+        if (previousHealth > 0 && health === 0) {
+          events.push({ type: "playerDestroyed", position: { ...player } });
+        }
+
         continue;
       }
 
       for (let projectileIndex = projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
         const projectile = projectiles[projectileIndex];
 
-        if (distance(enemy, projectile) < 0.36) {
+        if (distance(enemy, projectile) < enemyProjectileHitRadius) {
+          const destroyedPosition = { ...enemy };
           enemies.splice(enemyIndex, 1);
           projectiles.splice(projectileIndex, 1);
           score += 1;
+          events.push({ type: "enemyDestroyed", position: destroyedPosition });
           break;
         }
       }

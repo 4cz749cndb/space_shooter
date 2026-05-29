@@ -2,7 +2,7 @@
 
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Mesh } from "three";
+import type { Group, Mesh, MeshBasicMaterial } from "three";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
 import type { ActionState, Snapshot } from "@/game/simulation/types";
 
@@ -12,6 +12,13 @@ type HighScoreEntry = {
   name: string;
   score: number;
   isPlayer?: boolean;
+};
+type ExplosionKind = "enemy" | "player";
+type Explosion = {
+  id: number;
+  kind: ExplosionKind;
+  x: number;
+  y: number;
 };
 
 const highScores: HighScoreEntry[] = [
@@ -27,7 +34,8 @@ const initialSnapshot: Snapshot = {
   score: 0,
   wave: 1,
   health: 5,
-  maxHealth: 5
+  maxHealth: 5,
+  events: []
 };
 
 export function GameClient() {
@@ -80,6 +88,10 @@ export function GameClient() {
                 actions={actions.current}
                 onGameOver={handleGameOver}
                 onSnapshot={setSnapshot}
+                onStopMusic={music.stop}
+                playBuzz={music.playBuzz}
+                playExplosion={music.playExplosion}
+                playPew={music.playPew}
               />
             </Canvas>
           </div>
@@ -103,29 +115,99 @@ export function GameClient() {
 function SpaceScene({
   actions,
   onGameOver,
-  onSnapshot
+  onSnapshot,
+  onStopMusic,
+  playBuzz,
+  playExplosion,
+  playPew
 }: {
   actions: ActionState;
   onGameOver: (snapshot: Snapshot) => void;
   onSnapshot: (snapshot: Snapshot) => void;
+  onStopMusic: () => void;
+  playBuzz: () => void;
+  playExplosion: (kind: ExplosionKind) => void;
+  playPew: () => void;
 }) {
   const simulation = useMemo(() => createSpaceShooterSimulation(), []);
   const playerRef = useRef<Mesh>(null);
+  const playerMaterialRef = useRef<MeshBasicMaterial>(null);
   const gameOverRef = useRef(false);
+  const playerDestroyedRef = useRef(false);
+  const blinkUntilRef = useRef(0);
+  const explosionIdRef = useRef(1);
+  const gameOverTimerRef = useRef<number | null>(null);
+  const [explosions, setExplosions] = useState<Explosion[]>([]);
 
-  useFrame((_, delta) => {
+  useEffect(
+    () => () => {
+      if (gameOverTimerRef.current !== null) {
+        window.clearTimeout(gameOverTimerRef.current);
+      }
+    },
+    []
+  );
+
+  useFrame(({ clock }, delta) => {
     const snapshot = simulation.step(Math.min(delta, 0.05), actions);
+    const blinkRemaining = blinkUntilRef.current - clock.elapsedTime;
 
     if (playerRef.current) {
       playerRef.current.position.x = snapshot.player.x;
       playerRef.current.position.y = snapshot.player.y;
     }
 
+    if (playerMaterialRef.current) {
+      playerMaterialRef.current.visible =
+        !playerDestroyedRef.current && (blinkRemaining <= 0 || Math.floor(blinkRemaining * 18) % 2 === 0);
+    }
+
     onSnapshot(snapshot);
 
-    if (snapshot.health <= 0 && !gameOverRef.current) {
-      gameOverRef.current = true;
-      onGameOver(snapshot);
+    if (snapshot.events.length === 0) return;
+
+    const nextExplosions: Explosion[] = [];
+
+    for (const event of snapshot.events) {
+      if (event.type === "weaponFired") {
+        playPew();
+      }
+
+      if (event.type === "enemyDestroyed") {
+        playExplosion("enemy");
+        nextExplosions.push({
+          id: explosionIdRef.current++,
+          kind: "enemy",
+          x: event.position.x,
+          y: event.position.y
+        });
+      }
+
+      if (event.type === "playerHit") {
+        playBuzz();
+
+        if (event.health > 0) {
+          blinkUntilRef.current = clock.elapsedTime + 0.5;
+        }
+      }
+
+      if (event.type === "playerDestroyed" && !gameOverRef.current) {
+        gameOverRef.current = true;
+        playerDestroyedRef.current = true;
+        onStopMusic();
+        playExplosion("player");
+        nextExplosions.push({
+          id: explosionIdRef.current++,
+          kind: "player",
+          x: event.position.x,
+          y: event.position.y
+        });
+        gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot), 700);
+      }
+    }
+
+    if (nextExplosions.length > 0) {
+      setExplosions((current) => [...current, ...nextExplosions]);
     }
   });
 
@@ -135,8 +217,8 @@ function SpaceScene({
     <>
       <Starfield />
       <mesh ref={playerRef} position={[snapshot.player.x, snapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
-        <coneGeometry args={[0.36, 0.92, 3]} />
-        <meshBasicMaterial color="#66e3ff" />
+        <coneGeometry args={[0.29, 0.74, 3]} />
+        <meshBasicMaterial ref={playerMaterialRef} color="#66e3ff" />
       </mesh>
       {snapshot.projectiles.map((projectile) => (
         <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
@@ -146,11 +228,76 @@ function SpaceScene({
       ))}
       {snapshot.enemies.map((enemy) => (
         <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
-          <octahedronGeometry args={[0.32, 0]} />
+          <octahedronGeometry args={[0.26, 0]} />
           <meshBasicMaterial color="#ff5d73" />
         </mesh>
       ))}
+      {explosions.map((explosion) => (
+        <ExplosionEffect
+          key={explosion.id}
+          kind={explosion.kind}
+          position={[explosion.x, explosion.y, 0.08]}
+          onDone={() => setExplosions((current) => current.filter((item) => item.id !== explosion.id))}
+        />
+      ))}
     </>
+  );
+}
+
+function ExplosionEffect({
+  kind,
+  onDone,
+  position
+}: {
+  kind: ExplosionKind;
+  onDone: () => void;
+  position: [number, number, number];
+}) {
+  const groupRef = useRef<Group>(null);
+  const ageRef = useRef(0);
+  const doneRef = useRef(false);
+  const duration = kind === "player" ? 0.7 : 0.42;
+  const baseScale = kind === "player" ? 1.4 : 0.82;
+
+  useFrame((_, delta) => {
+    ageRef.current += delta;
+    const progress = Math.min(ageRef.current / duration, 1);
+
+    if (groupRef.current) {
+      const scale = baseScale * (0.35 + progress * 1.5);
+      groupRef.current.scale.setScalar(scale);
+      groupRef.current.rotation.z += delta * (kind === "player" ? 4.5 : 7);
+
+      for (const child of groupRef.current.children) {
+        child.visible = progress < 1;
+      }
+    }
+
+    if (progress >= 1 && !doneRef.current) {
+      doneRef.current = true;
+      onDone();
+    }
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.2, 0.28, 16]} />
+        <meshBasicMaterial color={kind === "player" ? "#66e3ff" : "#ffbf69"} transparent opacity={0.85} />
+      </mesh>
+      <mesh>
+        <circleGeometry args={[0.18, 12]} />
+        <meshBasicMaterial color="#ff5d73" transparent opacity={0.55} />
+      </mesh>
+      <mesh position={[0.24, 0.12, 0]}>
+        <circleGeometry args={[0.08, 8]} />
+        <meshBasicMaterial color="#ffe66d" transparent opacity={0.78} />
+      </mesh>
+      <mesh position={[-0.2, -0.16, 0]}>
+        <circleGeometry args={[0.07, 8]} />
+        <meshBasicMaterial color="#eef7ff" transparent opacity={0.72} />
+      </mesh>
+    </group>
   );
 }
 
@@ -399,8 +546,21 @@ function useKeyboardActions(active: boolean) {
 function useEightBitMusic() {
   const audioRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
+  const gainConnectedRef = useRef(false);
   const timerRef = useRef<number | null>(null);
   const resultTimerRef = useRef<number[]>([]);
+
+  const getMusicGain = (context: AudioContext) => {
+    const gain = gainRef.current ?? context.createGain();
+    gainRef.current = gain;
+
+    if (!gainConnectedRef.current) {
+      gain.connect(context.destination);
+      gainConnectedRef.current = true;
+    }
+
+    return gain;
+  };
 
   const stop = () => {
     if (timerRef.current !== null) {
@@ -427,9 +587,7 @@ function useEightBitMusic() {
       await context.resume();
     }
 
-    const gain = gainRef.current ?? context.createGain();
-    gainRef.current = gain;
-    gain.connect(context.destination);
+    const gain = getMusicGain(context);
     gain.gain.setValueAtTime(0.055, context.currentTime);
 
     const melody = [330, 392, 494, 392, 523, 494, 392, 294, 330, 392, 440, 392, 330, 262, 294, 330];
@@ -467,9 +625,7 @@ function useEightBitMusic() {
       await context.resume();
     }
 
-    const gain = gainRef.current ?? context.createGain();
-    gainRef.current = gain;
-    gain.connect(context.destination);
+    const gain = getMusicGain(context);
     gain.gain.setValueAtTime(0.065, context.currentTime);
 
     const notes = kind === "happy" ? [392, 494, 587, 784, 988] : [392, 349, 294, 247, 196];
@@ -494,9 +650,84 @@ function useEightBitMusic() {
     );
   };
 
+  const playPew = () => {
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(1160, now);
+    oscillator.frequency.exponentialRampToValueAtTime(520, now + 0.08);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.11);
+  };
+
+  const playBuzz = () => {
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(150, now);
+    oscillator.frequency.setValueAtTime(120, now + 0.045);
+    oscillator.frequency.setValueAtTime(150, now + 0.09);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.008);
+    gain.gain.setValueAtTime(0.16, now + 0.11);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.18);
+  };
+
+  const playExplosion = (kind: ExplosionKind) => {
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const now = context.currentTime;
+    const duration = kind === "player" ? 0.42 : 0.24;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "sawtooth";
+    oscillator.frequency.setValueAtTime(kind === "player" ? 220 : 360, now);
+    oscillator.frequency.exponentialRampToValueAtTime(kind === "player" ? 42 : 95, now + duration);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(kind === "player" ? 0.24 : 0.14, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + duration + 0.02);
+  };
+
   useEffect(() => stop, []);
 
-  return { playResultTune, start, stop };
+  return { playBuzz, playExplosion, playPew, playResultTune, start, stop };
 }
 
 function getAudioContext(audioRef: React.MutableRefObject<AudioContext | null>) {

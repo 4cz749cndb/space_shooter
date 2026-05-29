@@ -19,6 +19,25 @@ export type Enemy = Vector2 & {
   id: number;
 };
 
+export type SimulationEvent =
+  | {
+      type: "weaponFired";
+      position: Vector2;
+    }
+  | {
+      type: "enemyDestroyed";
+      position: Vector2;
+    }
+  | {
+      type: "playerHit";
+      health: number;
+      position: Vector2;
+    }
+  | {
+      type: "playerDestroyed";
+      position: Vector2;
+    };
+
 export type Snapshot = {
   player: Vector2;
   projectiles: Projectile[];
@@ -27,4 +46,5 @@ export type Snapshot = {
   wave: number;
   health: number;
   maxHealth: number;
+  events: SimulationEvent[];
 };
