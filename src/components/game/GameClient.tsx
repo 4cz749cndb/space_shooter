@@ -1,16 +1,21 @@
 "use client";
 
 import { Canvas, useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
 import type { ActionState, Enemy, PowerUpKind, Snapshot } from "@/game/simulation/types";
+import {
+  MAX_HIGH_SCORE_NAME_LENGTH,
+  qualifiesForHighScores,
+  sortHighScores,
+  staticHighScores,
+  type HighScoreEntry
+} from "@/lib/highScores";
 
 type GamePhase = "menu" | "playing" | "gameOver" | "exited";
 type ResultTune = "happy" | "sad";
-type HighScoreEntry = {
-  name: string;
-  score: number;
+type DisplayHighScoreEntry = HighScoreEntry & {
   isPlayer?: boolean;
 };
 type ExplosionKind = "enemy" | "player";
@@ -26,12 +31,6 @@ type ShieldFlash = {
   x: number;
   y: number;
 };
-
-const highScores: HighScoreEntry[] = [
-  { name: "ACE", score: 24 },
-  { name: "NOVA", score: 15 },
-  { name: "ZED", score: 8 }
-];
 
 const initialSnapshot: Snapshot = {
   player: { x: -2.8, y: 0 },
@@ -55,8 +54,29 @@ export function GameClient() {
   const [phase, setPhase] = useState<GamePhase>("menu");
   const [gameKey, setGameKey] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
+  const [highScores, setHighScores] = useState<HighScoreEntry[]>(staticHighScores);
   const actions = useKeyboardActions(phase === "playing");
   const music = useEightBitMusic();
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") return;
+
+    let isMounted = true;
+
+    async function loadHighScores() {
+      const scores = await fetchHighScores();
+
+      if (isMounted) {
+        setHighScores(scores);
+      }
+    }
+
+    void loadHighScores();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleNewGame = () => {
     music.stop();
@@ -75,7 +95,7 @@ export function GameClient() {
   };
 
   const handleGameOver = (finalSnapshot: Snapshot) => {
-    const qualifiesForTopThree = finalSnapshot.score > highScores[2].score;
+    const qualifiesForTopThree = qualifiesForHighScores(finalSnapshot.score, highScores);
 
     music.stop();
     music.setIntensity(1);
@@ -116,7 +136,13 @@ export function GameClient() {
           <Hud snapshot={snapshot} onExit={handleExit} />
         </>
       ) : phase === "gameOver" ? (
-        <GameOverScreen snapshot={snapshot} onBackToMenu={handleBackToMenu} onNewGame={handleNewGame} />
+        <GameOverScreen
+          highScores={highScores}
+          snapshot={snapshot}
+          onBackToMenu={handleBackToMenu}
+          onHighScoresChange={setHighScores}
+          onNewGame={handleNewGame}
+        />
       ) : (
         <RetroMenu
           phase={phase}
@@ -716,20 +742,78 @@ function RetroMenu({
 }
 
 function GameOverScreen({
+  highScores,
   snapshot,
   onBackToMenu,
+  onHighScoresChange,
   onNewGame
 }: {
+  highScores: HighScoreEntry[];
   snapshot: Snapshot;
   onBackToMenu: () => void;
+  onHighScoresChange: (scores: HighScoreEntry[]) => void;
   onNewGame: () => void;
 }) {
-  const qualifiesForTopThree = snapshot.score > highScores[2].score;
-  const playerScore: HighScoreEntry = { name: "YOU", score: snapshot.score, isPlayer: true };
+  const [playerName, setPlayerName] = useState("YOU");
+  const [submittedScoreId, setSubmittedScoreId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const qualifiesForTopThree = qualifiesForHighScores(snapshot.score, highScores);
+  const playerScore: DisplayHighScoreEntry = {
+    id: submittedScoreId ?? "current-player",
+    name: playerName.trim() || "YOU",
+    score: snapshot.score,
+    isPlayer: true
+  };
   const survivedTime = formatSurvivalTime(snapshot.elapsedTime);
-  const displayedScores = qualifiesForTopThree
+  const displayedScores: DisplayHighScoreEntry[] = submittedScoreId
+    ? highScores.map((entry) => ({
+        ...entry,
+        isPlayer: entry.id === submittedScoreId
+      }))
+    : qualifiesForTopThree
     ? [...highScores, playerScore].sort((a, b) => b.score - a.score).slice(0, 3)
     : highScores;
+  const submittedScoreIsVisible = displayedScores.some((entry) => entry.id === submittedScoreId);
+
+  const handleSubmitScore = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (isSubmitting || submittedScoreId) return;
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      const response = await fetch("/api/high-scores", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: playerName,
+          score: snapshot.score
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Score submission failed");
+      }
+
+      const result = (await response.json()) as HighScoresResponse;
+      const nextHighScores = parseHighScoresResponse(result.scores);
+      const submittedScore = parseSubmittedScore(result.submittedScore);
+
+      onHighScoresChange(nextHighScores);
+      setSubmittedScoreId(submittedScore?.id ?? null);
+      setPlayerName(submittedScore?.name ?? playerName);
+    } catch {
+      setSubmitError("Score link failed. Static board restored.");
+      onHighScoresChange(staticHighScores);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <RetroScreen ariaLabel="Game over">
@@ -749,7 +833,7 @@ function GameOverScreen({
           <p className="high-score-heading">High Scores</p>
           <ol className="high-score-list">
             {displayedScores.map((entry, index) => (
-              <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={`${entry.name}-${index}`}>
+              <li className={entry.isPlayer ? "high-score-row is-player" : "high-score-row"} key={entry.id ?? `${entry.name}-${index}`}>
                 <span className="high-score-rank">{index + 1}</span>
                 <span className="high-score-name">{entry.name}</span>
                 <span className="high-score-value">{entry.score}</span>
@@ -761,7 +845,36 @@ function GameOverScreen({
               Your Score <span>{snapshot.score}</span>
             </p>
           ) : null}
+          {submittedScoreId && !submittedScoreIsVisible ? (
+            <p className="player-score-note">
+              Score Saved <span>{snapshot.score}</span>
+            </p>
+          ) : null}
         </div>
+
+        {!submittedScoreId ? (
+          <form className="score-submit-form" aria-label="Submit high score" onSubmit={handleSubmitScore}>
+            <label className="score-submit-label" htmlFor="player-name">
+              Pilot Name
+            </label>
+            <div className="score-submit-row">
+              <input
+                id="player-name"
+                className="score-submit-input"
+                type="text"
+                value={playerName}
+                maxLength={MAX_HIGH_SCORE_NAME_LENGTH}
+                autoComplete="off"
+                inputMode="text"
+                onChange={(event) => setPlayerName(event.target.value)}
+              />
+              <button className="menu-button is-primary score-submit-button" type="submit" disabled={isSubmitting}>
+                {isSubmitting ? "Saving" : "Submit"}
+              </button>
+            </div>
+            {submitError ? <p className="score-submit-error">{submitError}</p> : null}
+          </form>
+        ) : null}
 
         <div className="menu-actions" aria-label="Game over actions">
           <button className="menu-button is-primary" type="button" onClick={onNewGame}>
@@ -782,6 +895,53 @@ function formatSurvivalTime(seconds: number) {
   const remainingSeconds = totalSeconds % 60;
 
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+type HighScoresResponse = {
+  scores?: unknown;
+  submittedScore?: unknown;
+};
+
+async function fetchHighScores() {
+  try {
+    const response = await fetch("/api/high-scores");
+
+    if (!response.ok) {
+      return staticHighScores;
+    }
+
+    const result = (await response.json()) as HighScoresResponse;
+
+    return parseHighScoresResponse(result.scores);
+  } catch {
+    return staticHighScores;
+  }
+}
+
+function parseHighScoresResponse(scores: unknown) {
+  if (!Array.isArray(scores)) return staticHighScores;
+
+  const parsedScores = scores
+    .map(parseSubmittedScore)
+    .filter((score): score is HighScoreEntry => Boolean(score));
+
+  return parsedScores.length > 0 ? sortHighScores(parsedScores) : staticHighScores;
+}
+
+function parseSubmittedScore(score: unknown): HighScoreEntry | null {
+  if (!score || typeof score !== "object") return null;
+
+  const entry = score as { id?: unknown; name?: unknown; score?: unknown };
+
+  if (typeof entry.name !== "string" || typeof entry.score !== "number" || !Number.isFinite(entry.score)) {
+    return null;
+  }
+
+  return {
+    id: typeof entry.id === "string" ? entry.id : undefined,
+    name: entry.name,
+    score: Math.max(0, Math.floor(entry.score))
+  };
 }
 
 function RetroScreen({
