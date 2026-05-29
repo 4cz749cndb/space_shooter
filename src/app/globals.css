@@ -261,6 +261,33 @@ select {
   width: min(500px, calc(100vw - 32px));
 }
 
+.final-run-stats {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 24px;
+  font-family: "Courier New", Courier, monospace;
+  text-transform: uppercase;
+}
+
+.final-run-stats p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  border: 1px solid rgba(238, 247, 255, 0.16);
+  background: rgba(5, 7, 13, 0.62);
+  padding: 9px 12px;
+  color: var(--muted);
+  font-size: clamp(0.8rem, 2.8vw, 0.95rem);
+  font-weight: 900;
+}
+
+.final-run-stats span {
+  color: var(--warning);
+  white-space: nowrap;
+}
+
 .high-score-board {
   margin: 0 0 22px;
   border: 2px solid rgba(102, 227, 255, 0.42);

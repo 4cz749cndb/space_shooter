@@ -17,15 +17,23 @@ export type Projectile = Vector2 & {
   velocityY: number;
 };
 
-export type EnemyKind = "basic" | "sineGunner";
+export type EnemyKind = "basic" | "sineGunner" | "miniBoss";
 
 export type Enemy = Vector2 & {
   id: number;
   age: number;
   baseY: number;
+  beamHasHitPlayer: boolean;
+  beamTimeRemaining: number;
   fireTimer: number;
+  health: number;
   kind: EnemyKind;
   phase: number;
+};
+
+export type EnemyBeam = {
+  id: number;
+  y: number;
 };
 
 export type EnemyProjectile = Vector2 & {
@@ -77,6 +85,7 @@ export type Snapshot = {
   projectiles: Projectile[];
   enemies: Enemy[];
   enemyProjectiles: EnemyProjectile[];
+  enemyBeams: EnemyBeam[];
   powerUps: PowerUp[];
   elapsedTime: number;
   score: number;

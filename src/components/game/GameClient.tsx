@@ -4,7 +4,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
-import type { ActionState, PowerUpKind, Snapshot } from "@/game/simulation/types";
+import type { ActionState, Enemy, PowerUpKind, Snapshot } from "@/game/simulation/types";
 
 type GamePhase = "menu" | "playing" | "gameOver" | "exited";
 type ResultTune = "happy" | "sad";
@@ -38,6 +38,7 @@ const initialSnapshot: Snapshot = {
   projectiles: [],
   enemies: [],
   enemyProjectiles: [],
+  enemyBeams: [],
   powerUps: [],
   elapsedTime: 0,
   score: 0,
@@ -272,11 +273,18 @@ function SpaceScene({
           <meshBasicMaterial color="#ffbf69" />
         </mesh>
       ))}
-      {snapshot.enemies.map((enemy) => (
-        <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
-          {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
-          <meshBasicMaterial color={enemy.kind === "sineGunner" ? "#8cff98" : "#ff5d73"} />
-        </mesh>
+      {snapshot.enemies.map((enemy) =>
+        enemy.kind === "miniBoss" ? (
+          <MiniBossEnemy key={enemy.id} enemy={enemy} />
+        ) : (
+          <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
+            {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
+            <meshBasicMaterial color={enemy.kind === "sineGunner" ? "#8cff98" : "#ff5d73"} />
+          </mesh>
+        )
+      )}
+      {snapshot.enemyBeams.map((beam) => (
+        <EnemyBeamEffect key={beam.id} y={beam.y} />
       ))}
       {snapshot.enemyProjectiles.map((projectile) => (
         <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
@@ -304,6 +312,78 @@ function SpaceScene({
         />
       ))}
     </>
+  );
+}
+
+function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
+  const groupRef = useRef<Group>(null);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+
+    groupRef.current.rotation.z = Math.sin(clock.elapsedTime * 2.4) * 0.04;
+    groupRef.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 5) * 0.025);
+  });
+
+  return (
+    <group ref={groupRef} position={[enemy.x, enemy.y, 0.02]}>
+      <mesh>
+        <boxGeometry args={[0.62, 0.82, 0.12]} />
+        <meshBasicMaterial color="#b45cff" />
+      </mesh>
+      <mesh rotation={[0, 0, Math.PI / 4]}>
+        <boxGeometry args={[0.72, 0.16, 0.14]} />
+        <meshBasicMaterial color="#ffbf69" />
+      </mesh>
+      <mesh rotation={[0, 0, -Math.PI / 4]}>
+        <boxGeometry args={[0.72, 0.16, 0.14]} />
+        <meshBasicMaterial color="#ffe66d" />
+      </mesh>
+      <mesh position={[-0.23, 0, 0.04]}>
+        <circleGeometry args={[0.12, 16]} />
+        <meshBasicMaterial color="#05070d" />
+      </mesh>
+      <mesh position={[-0.23, 0, 0.05]}>
+        <ringGeometry args={[0.12, 0.18, 18]} />
+        <meshBasicMaterial color={enemy.beamTimeRemaining > 0 ? "#ff2f7d" : "#66e3ff"} transparent opacity={0.9} />
+      </mesh>
+      <mesh position={[0.38, 0.31, 0.03]}>
+        <circleGeometry args={[0.08, 12]} />
+        <meshBasicMaterial color="#ff5d73" transparent opacity={0.82} />
+      </mesh>
+      <mesh position={[0.38, -0.31, 0.03]}>
+        <circleGeometry args={[0.08, 12]} />
+        <meshBasicMaterial color="#ff5d73" transparent opacity={0.82} />
+      </mesh>
+    </group>
+  );
+}
+
+function EnemyBeamEffect({ y }: { y: number }) {
+  const groupRef = useRef<Group>(null);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+
+    const pulse = 1 + Math.sin(clock.elapsedTime * 34) * 0.08;
+    groupRef.current.scale.y = pulse;
+  });
+
+  return (
+    <group ref={groupRef} position={[0, y, 0.04]}>
+      <mesh>
+        <boxGeometry args={[8.4, 0.34, 0.02]} />
+        <meshBasicMaterial color="#ff2f7d" transparent opacity={0.28} />
+      </mesh>
+      <mesh>
+        <boxGeometry args={[8.4, 0.14, 0.03]} />
+        <meshBasicMaterial color="#ff5d73" transparent opacity={0.78} />
+      </mesh>
+      <mesh>
+        <boxGeometry args={[8.4, 0.045, 0.04]} />
+        <meshBasicMaterial color="#eef7ff" transparent opacity={0.9} />
+      </mesh>
+    </group>
   );
 }
 
@@ -646,6 +726,7 @@ function GameOverScreen({
 }) {
   const qualifiesForTopThree = snapshot.score > highScores[2].score;
   const playerScore: HighScoreEntry = { name: "YOU", score: snapshot.score, isPlayer: true };
+  const survivedTime = formatSurvivalTime(snapshot.elapsedTime);
   const displayedScores = qualifiesForTopThree
     ? [...highScores, playerScore].sort((a, b) => b.score - a.score).slice(0, 3)
     : highScores;
@@ -655,7 +736,14 @@ function GameOverScreen({
       <div className="menu-stack game-over-stack">
         <p className="menu-kicker">{qualifiesForTopThree ? "Mission Complete" : "Signal Lost"}</p>
         <h1 className="menu-title">Game Over</h1>
-        <p className="menu-status">Final Score: {snapshot.score}</p>
+        <div className="final-run-stats" aria-label="Final run stats">
+          <p>
+            Final Score <span>{snapshot.score}</span>
+          </p>
+          <p>
+            Time Survived <span>{survivedTime}</span>
+          </p>
+        </div>
 
         <div className="high-score-board" aria-label="High scores">
           <p className="high-score-heading">High Scores</p>
@@ -686,6 +774,14 @@ function GameOverScreen({
       </div>
     </RetroScreen>
   );
+}
+
+function formatSurvivalTime(seconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
 function RetroScreen({
