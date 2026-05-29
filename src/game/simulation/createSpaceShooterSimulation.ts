@@ -28,7 +28,8 @@ const miniBossHealth = 8;
 const miniBossScore = 20;
 const miniBossBeamDurationMin = 2;
 const miniBossBeamDurationMax = 7;
-const miniBossBeamHalfHeight = 0.15;
+const miniBossBeamHalfHeight = 0.34;
+const miniBossProjectileHitRadius = 0.32;
 const miniBossFireMin = 2;
 const miniBossFireMax = 5;
 const miniBossSpawnGracePeriod = 45;
@@ -308,7 +309,7 @@ export function createSpaceShooterSimulation() {
       for (let projectileIndex = projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
         const projectile = projectiles[projectileIndex];
 
-        const hitRadius = enemy.kind === "miniBoss" ? 0.48 : enemyProjectileHitRadius;
+        const hitRadius = enemy.kind === "miniBoss" ? miniBossProjectileHitRadius : enemyProjectileHitRadius;
 
         if (distance(enemy, projectile) < hitRadius) {
           const destroyedPosition = { ...enemy };

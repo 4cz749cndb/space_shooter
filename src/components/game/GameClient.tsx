@@ -356,31 +356,31 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
   return (
     <group ref={groupRef} position={[enemy.x, enemy.y, 0.02]}>
       <mesh>
-        <boxGeometry args={[0.62, 0.82, 0.12]} />
+        <boxGeometry args={[0.5, 0.58, 0.12]} />
         <meshBasicMaterial color="#b45cff" />
       </mesh>
       <mesh rotation={[0, 0, Math.PI / 4]}>
-        <boxGeometry args={[0.72, 0.16, 0.14]} />
+        <boxGeometry args={[0.56, 0.13, 0.14]} />
         <meshBasicMaterial color="#ffbf69" />
       </mesh>
       <mesh rotation={[0, 0, -Math.PI / 4]}>
-        <boxGeometry args={[0.72, 0.16, 0.14]} />
+        <boxGeometry args={[0.56, 0.13, 0.14]} />
         <meshBasicMaterial color="#ffe66d" />
       </mesh>
-      <mesh position={[-0.23, 0, 0.04]}>
+      <mesh position={[-0.2, 0, 0.04]}>
         <circleGeometry args={[0.12, 16]} />
         <meshBasicMaterial color="#05070d" />
       </mesh>
-      <mesh position={[-0.23, 0, 0.05]}>
+      <mesh position={[-0.2, 0, 0.05]}>
         <ringGeometry args={[0.12, 0.18, 18]} />
         <meshBasicMaterial color={enemy.beamTimeRemaining > 0 ? "#ff2f7d" : "#66e3ff"} transparent opacity={0.9} />
       </mesh>
-      <mesh position={[0.38, 0.31, 0.03]}>
-        <circleGeometry args={[0.08, 12]} />
+      <mesh position={[0.31, 0.22, 0.03]}>
+        <circleGeometry args={[0.065, 12]} />
         <meshBasicMaterial color="#ff5d73" transparent opacity={0.82} />
       </mesh>
-      <mesh position={[0.38, -0.31, 0.03]}>
-        <circleGeometry args={[0.08, 12]} />
+      <mesh position={[0.31, -0.22, 0.03]}>
+        <circleGeometry args={[0.065, 12]} />
         <meshBasicMaterial color="#ff5d73" transparent opacity={0.82} />
       </mesh>
     </group>
@@ -400,15 +400,15 @@ function EnemyBeamEffect({ y }: { y: number }) {
   return (
     <group ref={groupRef} position={[0, y, 0.04]}>
       <mesh>
-        <boxGeometry args={[8.4, 0.34, 0.02]} />
+        <boxGeometry args={[8.4, 0.72, 0.02]} />
         <meshBasicMaterial color="#ff2f7d" transparent opacity={0.28} />
       </mesh>
       <mesh>
-        <boxGeometry args={[8.4, 0.14, 0.03]} />
+        <boxGeometry args={[8.4, 0.34, 0.03]} />
         <meshBasicMaterial color="#ff5d73" transparent opacity={0.78} />
       </mesh>
       <mesh>
-        <boxGeometry args={[8.4, 0.045, 0.04]} />
+        <boxGeometry args={[8.4, 0.09, 0.04]} />
         <meshBasicMaterial color="#eef7ff" transparent opacity={0.9} />
       </mesh>
     </group>
