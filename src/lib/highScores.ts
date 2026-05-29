@@ -4,7 +4,7 @@ export type HighScoreEntry = {
   score: number;
 };
 
-export const HIGH_SCORE_LIMIT = 3;
+export const HIGH_SCORE_LIMIT = 10;
 export const HIGH_SCORE_STORAGE_LIMIT = 100;
 export const HIGH_SCORE_KEY = "space-shooter:high-scores";
 export const MAX_HIGH_SCORE_NAME_LENGTH = 12;
@@ -12,7 +12,14 @@ export const MAX_HIGH_SCORE_NAME_LENGTH = 12;
 export const staticHighScores: HighScoreEntry[] = [
   { id: "static-ace", name: "ACE", score: 24 },
   { id: "static-nova", name: "NOVA", score: 15 },
-  { id: "static-zed", name: "ZED", score: 8 }
+  { id: "static-zed", name: "ZED", score: 8 },
+  { id: "static-orion", name: "ORION", score: 6 },
+  { id: "static-lynx", name: "LYNX", score: 5 },
+  { id: "static-vex", name: "VEX", score: 4 },
+  { id: "static-ion", name: "ION", score: 3 },
+  { id: "static-echo", name: "ECHO", score: 2 },
+  { id: "static-mars", name: "MARS", score: 1 },
+  { id: "static-rook", name: "ROOK", score: 0 }
 ];
 
 export function sanitizeHighScoreName(name: unknown) {

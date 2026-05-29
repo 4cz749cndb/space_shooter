@@ -297,6 +297,8 @@ select {
   border: 2px solid rgba(102, 227, 255, 0.42);
   background: rgba(12, 18, 28, 0.74);
   padding: 14px;
+  max-height: min(48vh, 460px);
+  overflow-y: auto;
   font-family: "Courier New", Courier, monospace;
   text-transform: uppercase;
 }
@@ -310,7 +312,7 @@ select {
 
 .high-score-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -321,12 +323,12 @@ select {
   grid-template-columns: 32px 1fr minmax(40px, auto);
   align-items: center;
   gap: 10px;
-  min-height: 34px;
+  min-height: 30px;
   border: 1px solid rgba(238, 247, 255, 0.16);
   background: rgba(5, 7, 13, 0.62);
-  padding: 7px 10px;
+  padding: 5px 10px;
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 900;
 }
 

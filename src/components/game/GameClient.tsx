@@ -791,7 +791,7 @@ function GameOverScreen({
         isPlayer: entry.id === submittedScoreId
       }))
     : qualifiesForTopThree
-    ? [...highScores, playerScore].sort((a, b) => b.score - a.score).slice(0, 3)
+    ? sortHighScores([...highScores, playerScore])
     : highScores;
   const submittedScoreIsVisible = displayedScores.some((entry) => entry.id === submittedScoreId);
 
