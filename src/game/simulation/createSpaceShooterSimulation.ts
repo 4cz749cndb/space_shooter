@@ -21,6 +21,8 @@ const powerUpSpawnMin = 12;
 const powerUpSpawnMax = 20;
 const weaponPowerDuration = 15;
 const sineGunnerChance = 0.33;
+const sineGunnerFireMin = 0.5;
+const sineGunnerFireMax = 3;
 const sineAmplitude = 0.72;
 const sineFrequency = 3.1;
 const miniBossChance = 0.04;
@@ -87,7 +89,7 @@ export function createSpaceShooterSimulation() {
       beamTimeRemaining: 0,
       fireTimer:
         kind === "sineGunner"
-          ? randomRange(0.5, 3)
+          ? getSineGunnerFireInterval()
           : kind === "miniBoss"
             ? randomRange(miniBossFireMin, miniBossFireMax)
             : Number.POSITIVE_INFINITY,
@@ -170,6 +172,8 @@ export function createSpaceShooterSimulation() {
 
   const getTimeScale = () => clamp(1 + elapsedTime / 180, 1, maxTimeScale);
 
+  const getSineGunnerFireInterval = () => randomRange(sineGunnerFireMin, sineGunnerFireMax) / getTimeScale();
+
   const step = (delta: number, actions: ActionState): Snapshot => {
     if (health <= 0) {
       return getSnapshot();
@@ -223,10 +227,10 @@ export function createSpaceShooterSimulation() {
           bounds.bottom + 0.35,
           bounds.top - 0.35
         );
-        enemy.fireTimer -= timeScale * delta;
+        enemy.fireTimer -= delta;
 
         if (enemy.fireTimer <= 0) {
-          enemy.fireTimer = randomRange(0.5, 3);
+          enemy.fireTimer = getSineGunnerFireInterval();
           enemyProjectiles.push(createEnemyProjectile(enemy));
         }
       } else if (enemy.kind === "miniBoss") {
