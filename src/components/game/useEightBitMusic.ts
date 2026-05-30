@@ -141,6 +141,34 @@ export function useEightBitMusic() {
     );
   };
 
+  const playLevelUpTune = () => {
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const notes = [523, 659, 784, 1047, 1319];
+    const now = context.currentTime;
+
+    notes.forEach((frequency, index) => {
+      const startTime = now + index * 0.07;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+
+      oscillator.type = index % 2 === 0 ? "square" : "triangle";
+      oscillator.frequency.setValueAtTime(frequency, startTime);
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.16, startTime + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.18);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + 0.2);
+    });
+  };
+
   const playPew = () => {
     const context = getAudioContext(audioRef);
     if (!context) return;
@@ -218,7 +246,7 @@ export function useEightBitMusic() {
 
   useEffect(() => stop, []);
 
-  return { playBuzz, playExplosion, playPew, playResultTune, setIntensity, start, stop };
+  return { playBuzz, playExplosion, playLevelUpTune, playPew, playResultTune, setIntensity, start, stop };
 }
 
 function getAudioContext(audioRef: MutableRefObject<AudioContext | null>) {

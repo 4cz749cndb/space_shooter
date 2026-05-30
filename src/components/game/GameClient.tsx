@@ -23,6 +23,10 @@ type ShieldFlash = {
   x: number;
   y: number;
 };
+type LevelUpMessage = {
+  id: number;
+  level: number;
+};
 
 const initialSnapshot: Snapshot = {
   player: { x: -2.8, y: 0 },
@@ -34,11 +38,13 @@ const initialSnapshot: Snapshot = {
   elapsedTime: 0,
   score: 0,
   shieldCharges: 0,
+  level: 1,
+  nextLevelScore: 100,
   timeScale: 1,
   wave: 1,
   weaponPowerTimeRemaining: 0,
-  health: 5,
-  maxHealth: 5,
+  health: 100,
+  maxHealth: 100,
   events: []
 };
 const hudSnapshotInterval = 1 / 12;
@@ -46,15 +52,49 @@ const hudSnapshotInterval = 1 / 12;
 export function GameClient() {
   const [phase, setPhase] = useState<GamePhase>("menu");
   const [gameKey, setGameKey] = useState(0);
+  const [levelUpMessage, setLevelUpMessage] = useState<LevelUpMessage | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
+  const levelUpMessageIdRef = useRef(1);
+  const levelUpMessageTimerRef = useRef<number | null>(null);
   const { highScores, refreshHighScores, submitHighScore } = useHighScores();
   const actions = useKeyboardActions(phase === "playing");
   const music = useEightBitMusic();
+
+  useEffect(
+    () => () => {
+      if (levelUpMessageTimerRef.current !== null) {
+        window.clearTimeout(levelUpMessageTimerRef.current);
+      }
+    },
+    []
+  );
+
+  const clearLevelUpMessage = () => {
+    if (levelUpMessageTimerRef.current !== null) {
+      window.clearTimeout(levelUpMessageTimerRef.current);
+      levelUpMessageTimerRef.current = null;
+    }
+
+    setLevelUpMessage(null);
+  };
+
+  const handleLevelUp = (level: number) => {
+    if (levelUpMessageTimerRef.current !== null) {
+      window.clearTimeout(levelUpMessageTimerRef.current);
+    }
+
+    setLevelUpMessage({ id: levelUpMessageIdRef.current++, level });
+    levelUpMessageTimerRef.current = window.setTimeout(() => {
+      setLevelUpMessage(null);
+      levelUpMessageTimerRef.current = null;
+    }, 1800);
+  };
 
   const handleNewGame = () => {
     music.stop();
     music.setIntensity(1);
     void music.start();
+    clearLevelUpMessage();
     setSnapshot(initialSnapshot);
     setGameKey((key) => key + 1);
     setPhase("playing");
@@ -63,6 +103,7 @@ export function GameClient() {
   const handleExit = () => {
     music.stop();
     music.setIntensity(1);
+    clearLevelUpMessage();
     setSnapshot(initialSnapshot);
     setPhase("exited");
   };
@@ -72,6 +113,7 @@ export function GameClient() {
 
     music.stop();
     music.setIntensity(1);
+    clearLevelUpMessage();
     setSnapshot(finalSnapshot);
     setPhase("gameOver");
     void music.playResultTune(qualifiesForLeaderboard ? "happy" : "sad");
@@ -80,6 +122,7 @@ export function GameClient() {
   const handleBackToMenu = () => {
     music.stop();
     music.setIntensity(1);
+    clearLevelUpMessage();
     setSnapshot(initialSnapshot);
     setPhase("menu");
   };
@@ -102,16 +145,19 @@ export function GameClient() {
                 key={gameKey}
                 actions={actions.current}
                 onGameOver={handleGameOver}
+                onLevelUp={handleLevelUp}
                 onSnapshot={setSnapshot}
                 onTimeScaleChange={music.setIntensity}
                 onStopMusic={music.stop}
                 playBuzz={music.playBuzz}
                 playExplosion={music.playExplosion}
+                playLevelUpTune={music.playLevelUpTune}
                 playPew={music.playPew}
               />
             </Canvas>
           </div>
           <Hud snapshot={snapshot} onExit={handleExit} />
+          {levelUpMessage ? <LevelUpBanner key={levelUpMessage.id} level={levelUpMessage.level} /> : null}
         </>
       ) : phase === "gameOver" ? (
         <GameOverScreen
@@ -139,20 +185,24 @@ export function GameClient() {
 function SpaceScene({
   actions,
   onGameOver,
+  onLevelUp,
   onSnapshot,
   onTimeScaleChange,
   onStopMusic,
   playBuzz,
   playExplosion,
+  playLevelUpTune,
   playPew
 }: {
   actions: ActionState;
   onGameOver: (snapshot: Snapshot) => void;
+  onLevelUp: (level: number) => void;
   onSnapshot: (snapshot: Snapshot) => void;
   onTimeScaleChange: (timeScale: number) => void;
   onStopMusic: () => void;
   playBuzz: () => void;
   playExplosion: (kind: ExplosionKind) => void;
+  playLevelUpTune: () => void;
   playPew: () => void;
 }) {
   const simulation = useMemo(() => createSpaceShooterSimulation(), []);
@@ -179,11 +229,15 @@ function SpaceScene({
     []
   );
 
-  useFrame(({ clock }, delta) => {
+  const elapsedTimeRef = useRef(0);
+
+  useFrame((_, delta) => {
+    elapsedTimeRef.current += delta;
     const snapshot = simulation.step(Math.min(delta, 0.05), actions);
-    const blinkRemaining = blinkUntilRef.current - clock.elapsedTime;
+    const elapsedTime = elapsedTimeRef.current;
+    const blinkRemaining = blinkUntilRef.current - elapsedTime;
     const shouldPublishHudSnapshot =
-      clock.elapsedTime - lastHudUpdateTimeRef.current >= hudSnapshotInterval ||
+      elapsedTime - lastHudUpdateTimeRef.current >= hudSnapshotInterval ||
       hasHudSnapshotChanged(snapshot, lastHudSnapshotRef.current);
 
     setSceneSnapshot(snapshot);
@@ -200,7 +254,7 @@ function SpaceScene({
 
     if (shouldPublishHudSnapshot) {
       lastHudSnapshotRef.current = snapshot;
-      lastHudUpdateTimeRef.current = clock.elapsedTime;
+      lastHudUpdateTimeRef.current = elapsedTime;
       onSnapshot(snapshot);
     }
 
@@ -230,7 +284,7 @@ function SpaceScene({
         playBuzz();
 
         if (event.health > 0) {
-          blinkUntilRef.current = clock.elapsedTime + 0.5;
+          blinkUntilRef.current = elapsedTime + 0.5;
         }
       }
 
@@ -243,11 +297,16 @@ function SpaceScene({
         });
       }
 
+      if (event.type === "levelUp") {
+        playLevelUpTune();
+        onLevelUp(event.level);
+      }
+
       if (event.type === "playerDestroyed" && !gameOverRef.current) {
         gameOverRef.current = true;
         playerDestroyedRef.current = true;
         lastHudSnapshotRef.current = snapshot;
-        lastHudUpdateTimeRef.current = clock.elapsedTime;
+        lastHudUpdateTimeRef.current = elapsedTime;
         onSnapshot(snapshot);
         onStopMusic();
         playExplosion("player");
@@ -339,6 +398,8 @@ function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
   return (
     next.score !== previous.score ||
     next.wave !== previous.wave ||
+    next.level !== previous.level ||
+    next.nextLevelScore !== previous.nextLevelScore ||
     next.health !== previous.health ||
     next.maxHealth !== previous.maxHealth
   );
@@ -346,12 +407,14 @@ function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
 
 function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
   const groupRef = useRef<Group>(null);
+  const elapsedTimeRef = useRef(0);
 
-  useFrame(({ clock }) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
 
-    groupRef.current.rotation.z = Math.sin(clock.elapsedTime * 2.4) * 0.04;
-    groupRef.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 5) * 0.025);
+    elapsedTimeRef.current += delta;
+    groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 2.4) * 0.04;
+    groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 5) * 0.025);
   });
 
   return (
@@ -390,11 +453,13 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
 
 function EnemyBeamEffect({ y }: { y: number }) {
   const groupRef = useRef<Group>(null);
+  const elapsedTimeRef = useRef(0);
 
-  useFrame(({ clock }) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
 
-    const pulse = 1 + Math.sin(clock.elapsedTime * 34) * 0.08;
+    elapsedTimeRef.current += delta;
+    const pulse = 1 + Math.sin(elapsedTimeRef.current * 34) * 0.08;
     groupRef.current.scale.y = pulse;
   });
 
@@ -418,11 +483,13 @@ function EnemyBeamEffect({ y }: { y: number }) {
 
 function PlayerShield({ charges, position }: { charges: number; position: [number, number, number] }) {
   const groupRef = useRef<Group>(null);
+  const elapsedTimeRef = useRef(0);
 
-  useFrame(({ clock }) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
 
-    const pulse = 1 + Math.sin(clock.elapsedTime * 6) * 0.05 + Math.min(charges - 1, 3) * 0.03;
+    elapsedTimeRef.current += delta;
+    const pulse = 1 + Math.sin(elapsedTimeRef.current * 6) * 0.05 + Math.min(charges - 1, 3) * 0.03;
     groupRef.current.scale.setScalar(pulse);
     groupRef.current.rotation.z += 0.025;
   });
@@ -443,12 +510,14 @@ function PlayerShield({ charges, position }: { charges: number; position: [numbe
 
 function WeaponPowerAura({ position }: { position: [number, number, number] }) {
   const groupRef = useRef<Group>(null);
+  const elapsedTimeRef = useRef(0);
 
-  useFrame(({ clock }) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
 
-    groupRef.current.rotation.z = Math.sin(clock.elapsedTime * 8) * 0.08;
-    groupRef.current.scale.setScalar(1 + Math.sin(clock.elapsedTime * 10) * 0.04);
+    elapsedTimeRef.current += delta;
+    groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 8) * 0.08;
+    groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 10) * 0.04);
   });
 
   return (
@@ -471,11 +540,13 @@ function WeaponPowerAura({ position }: { position: [number, number, number] }) {
 
 function PowerUpPickup({ kind, position }: { kind: PowerUpKind; position: [number, number, number] }) {
   const groupRef = useRef<Group>(null);
+  const elapsedTimeRef = useRef(0);
 
-  useFrame(({ clock }, delta) => {
+  useFrame((_, delta) => {
     if (!groupRef.current) return;
 
-    const pulse = 1 + Math.sin(clock.elapsedTime * 7) * 0.08;
+    elapsedTimeRef.current += delta;
+    const pulse = 1 + Math.sin(elapsedTimeRef.current * 7) * 0.08;
     groupRef.current.scale.setScalar(pulse);
     groupRef.current.rotation.z += delta * 2.5;
   });
@@ -668,6 +739,11 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
           <p className="hud-label">Wave</p>
           <p className="hud-value">{snapshot.wave}</p>
         </div>
+        <div className="hud-panel hud-level">
+          <p className="hud-label">Level</p>
+          <p className="hud-value">{snapshot.level}</p>
+          <p className="hud-subvalue">Next {snapshot.nextLevelScore}</p>
+        </div>
         <div className="hud-panel hud-health">
           <div className="hud-health-header">
             <p className="hud-label">Health</p>
@@ -692,6 +768,16 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
       </div>
       <div className="hud-bottom">Dodge incoming objects from the right. Move with WASD or arrows. Fire with Space.</div>
     </section>
+  );
+}
+
+function LevelUpBanner({ level }: { level: number }) {
+  return (
+    <div className="level-up-banner" aria-live="polite" role="status">
+      <span className="level-up-kicker">Level Up</span>
+      <span className="level-up-value">Level {level}</span>
+      <span className="level-up-bonus">Max health restored</span>
+    </div>
   );
 }
 

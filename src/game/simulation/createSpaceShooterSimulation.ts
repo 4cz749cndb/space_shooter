@@ -34,12 +34,22 @@ const miniBossFireMin = 2;
 const miniBossFireMax = 5;
 const miniBossSpawnGracePeriod = 45;
 const maxTimeScale = 2;
-const maxHealth = 5;
+const initialMaxHealth = 100;
+const firstLevelScore = 100;
+const baseLevelScoreCost = 100;
+const totalScoreLevelCostMultiplier = 0.1;
+const levelHealthBonus = 20;
+const enemyCollisionDamage = 20;
+const enemyProjectileDamage = 10;
+const enemyBeamDamage = 10;
 
 export function createSpaceShooterSimulation() {
   let nextId = 1;
   let score = 0;
   let wave = 1;
+  let level = 1;
+  let nextLevelScore = firstLevelScore;
+  let maxHealth = initialMaxHealth;
   let health = maxHealth;
   let shieldCharges = 0;
   let weaponPowerTimeRemaining = 0;
@@ -65,6 +75,8 @@ export function createSpaceShooterSimulation() {
     elapsedTime,
     score,
     shieldCharges,
+    level,
+    nextLevelScore,
     timeScale: getTimeScale(),
     wave,
     weaponPowerTimeRemaining,
@@ -147,7 +159,7 @@ export function createSpaceShooterSimulation() {
     events.push({ type: "weaponFired", position: firedPosition });
   };
 
-  const damagePlayer = (events: SimulationEvent[]) => {
+  const damagePlayer = (events: SimulationEvent[], damage: number) => {
     if (shieldCharges > 0) {
       shieldCharges -= 1;
       events.push({ type: "shieldBlockedHit", position: { ...player }, shieldCharges });
@@ -155,7 +167,7 @@ export function createSpaceShooterSimulation() {
     }
 
     const previousHealth = health;
-    health = Math.max(0, health - 1);
+    health = Math.max(0, health - damage);
     events.push({ type: "playerHit", health, position: { ...player } });
 
     if (previousHealth > 0 && health === 0) {
@@ -169,6 +181,16 @@ export function createSpaceShooterSimulation() {
   };
 
   const getTimeScale = () => clamp(1 + elapsedTime / 180, 1, maxTimeScale);
+
+  const processLevelUps = (events: SimulationEvent[]) => {
+    while (score >= nextLevelScore) {
+      level += 1;
+      maxHealth += levelHealthBonus;
+      health = maxHealth;
+      nextLevelScore += getNextLevelScoreCost(score);
+      events.push({ type: "levelUp", health, level, maxHealth, nextLevelScore });
+    }
+  };
 
   const step = (delta: number, actions: ActionState): Snapshot => {
     if (health <= 0) {
@@ -235,7 +257,7 @@ export function createSpaceShooterSimulation() {
 
           if (!enemy.beamHasHitPlayer && Math.abs(player.y - enemy.y) <= miniBossBeamHalfHeight) {
             enemy.beamHasHitPlayer = true;
-            damagePlayer(events);
+            damagePlayer(events, enemyBeamDamage);
           }
 
           if (enemy.beamTimeRemaining <= 0) {
@@ -279,7 +301,7 @@ export function createSpaceShooterSimulation() {
         if (powerUp.kind === "shield") {
           shieldCharges += 1;
         } else if (powerUp.kind === "health") {
-          health = Math.min(maxHealth, health + 1);
+          health = Math.min(maxHealth, health + enemyCollisionDamage);
         } else {
           weaponPowerTimeRemaining = weaponPowerDuration;
         }
@@ -293,7 +315,7 @@ export function createSpaceShooterSimulation() {
 
       if (distance(projectile, player) < playerEnemyProjectileHitRadius) {
         enemyProjectiles.splice(projectileIndex, 1);
-        damagePlayer(events);
+        damagePlayer(events, enemyProjectileDamage);
       }
     }
 
@@ -302,7 +324,7 @@ export function createSpaceShooterSimulation() {
 
       if (enemy.kind !== "miniBoss" && distance(enemy, player) < playerEnemyHitRadius) {
         enemies.splice(enemyIndex, 1);
-        damagePlayer(events);
+        damagePlayer(events, enemyCollisionDamage);
         continue;
       }
 
@@ -325,6 +347,7 @@ export function createSpaceShooterSimulation() {
 
           enemies.splice(enemyIndex, 1);
           score += getEnemyScore(enemy);
+          processLevelUps(events);
           events.push({ type: "enemyDestroyed", position: destroyedPosition });
           break;
         }
@@ -369,6 +392,10 @@ function distance(a: Vector2, b: Vector2) {
 
 function randomRange(min: number, max: number) {
   return min + Math.random() * (max - min);
+}
+
+function getNextLevelScoreCost(totalScore: number) {
+  return Math.ceil(baseLevelScoreCost + totalScore * totalScoreLevelCostMultiplier);
 }
 
 function removeWhere<T>(items: T[], predicate: (item: T) => boolean) {
