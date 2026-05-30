@@ -407,6 +407,7 @@ function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
 
 function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
   const groupRef = useRef<Group>(null);
+  const chargeGlowRef = useRef<MeshBasicMaterial>(null);
   const elapsedTimeRef = useRef(0);
 
   useFrame((_, delta) => {
@@ -415,17 +416,30 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
     elapsedTimeRef.current += delta;
     groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 2.4) * 0.04;
     groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 5) * 0.025);
+
+    if (chargeGlowRef.current) {
+      const isCharging = enemy.beamChargeTimeRemaining > 0;
+      chargeGlowRef.current.opacity = isCharging ? 0.32 + Math.sin(elapsedTimeRef.current * 28) * 0.14 : 0;
+    }
   });
+
+  const isBeamActive = enemy.beamTimeRemaining > 0;
+  const isBeamCharging = enemy.beamChargeTimeRemaining > 0;
+  const coreColor = isBeamActive ? "#ff2f7d" : isBeamCharging ? "#ffe66d" : "#66e3ff";
 
   return (
     <group ref={groupRef} position={[enemy.x, enemy.y, 0.02]}>
+      <mesh position={[0, 0, -0.02]}>
+        <circleGeometry args={[0.64, 24]} />
+        <meshBasicMaterial ref={chargeGlowRef} color="#ffe66d" transparent opacity={0} />
+      </mesh>
       <mesh>
         <boxGeometry args={[0.5, 0.58, 0.12]} />
-        <meshBasicMaterial color="#b45cff" />
+        <meshBasicMaterial color={isBeamCharging ? "#e8a8ff" : "#b45cff"} />
       </mesh>
       <mesh rotation={[0, 0, Math.PI / 4]}>
         <boxGeometry args={[0.56, 0.13, 0.14]} />
-        <meshBasicMaterial color="#ffbf69" />
+        <meshBasicMaterial color={isBeamCharging ? "#ffe66d" : "#ffbf69"} />
       </mesh>
       <mesh rotation={[0, 0, -Math.PI / 4]}>
         <boxGeometry args={[0.56, 0.13, 0.14]} />
@@ -437,7 +451,7 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
       </mesh>
       <mesh position={[-0.2, 0, 0.05]}>
         <ringGeometry args={[0.12, 0.18, 18]} />
-        <meshBasicMaterial color={enemy.beamTimeRemaining > 0 ? "#ff2f7d" : "#66e3ff"} transparent opacity={0.9} />
+        <meshBasicMaterial color={coreColor} transparent opacity={isBeamCharging ? 1 : 0.9} />
       </mesh>
       <mesh position={[0.31, 0.22, 0.03]}>
         <circleGeometry args={[0.065, 12]} />
