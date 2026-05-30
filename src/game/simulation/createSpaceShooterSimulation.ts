@@ -28,6 +28,7 @@ const sineFrequency = 3.1;
 const miniBossChance = 0.04;
 const miniBossHealth = 8;
 const miniBossScore = 20;
+const miniBossBeamChargeDuration = 0.75;
 const miniBossBeamDurationMin = 2;
 const miniBossBeamDurationMax = 7;
 const miniBossBeamHalfHeight = 0.34;
@@ -35,13 +36,26 @@ const miniBossProjectileHitRadius = 0.32;
 const miniBossFireMin = 2;
 const miniBossFireMax = 5;
 const miniBossSpawnGracePeriod = 45;
+const miniBossDriftAmplitude = 0.55;
+const miniBossDriftFrequency = 1.05;
 const maxTimeScale = 2;
-const maxHealth = 5;
+const maxTimeScaleElapsedSeconds = 240;
+const initialMaxHealth = 100;
+const firstLevelScore = 100;
+const baseLevelScoreCost = 100;
+const totalScoreLevelCostMultiplier = 0.1;
+const levelHealthBonus = 20;
+const enemyCollisionDamage = 20;
+const enemyProjectileDamage = 10;
+const enemyBeamDamage = 10;
 
 export function createSpaceShooterSimulation() {
   let nextId = 1;
   let score = 0;
   let wave = 1;
+  let level = 1;
+  let nextLevelScore = firstLevelScore;
+  let maxHealth = initialMaxHealth;
   let health = maxHealth;
   let shieldCharges = 0;
   let weaponPowerTimeRemaining = 0;
@@ -67,6 +81,8 @@ export function createSpaceShooterSimulation() {
     elapsedTime,
     score,
     shieldCharges,
+    level,
+    nextLevelScore,
     timeScale: getTimeScale(),
     wave,
     weaponPowerTimeRemaining,
@@ -85,6 +101,7 @@ export function createSpaceShooterSimulation() {
       id: nextId++,
       age: 0,
       baseY,
+      beamChargeTimeRemaining: 0,
       beamHasHitPlayer: false,
       beamTimeRemaining: 0,
       fireTimer:
@@ -93,7 +110,7 @@ export function createSpaceShooterSimulation() {
           : kind === "miniBoss"
             ? randomRange(miniBossFireMin, miniBossFireMax)
             : Number.POSITIVE_INFINITY,
-      health: kind === "miniBoss" ? miniBossHealth : 1,
+      health: getEnemyHealth(kind),
       kind,
       phase: randomRange(0, Math.PI * 2),
       x: kind === "miniBoss" ? bounds.right - 0.42 : bounds.right + 0.4,
@@ -149,7 +166,7 @@ export function createSpaceShooterSimulation() {
     events.push({ type: "weaponFired", position: firedPosition });
   };
 
-  const damagePlayer = (events: SimulationEvent[]) => {
+  const damagePlayer = (events: SimulationEvent[], damage: number) => {
     if (shieldCharges > 0) {
       shieldCharges -= 1;
       events.push({ type: "shieldBlockedHit", position: { ...player }, shieldCharges });
@@ -157,7 +174,7 @@ export function createSpaceShooterSimulation() {
     }
 
     const previousHealth = health;
-    health = Math.max(0, health - 1);
+    health = Math.max(0, health - damage);
     events.push({ type: "playerHit", health, position: { ...player } });
 
     if (previousHealth > 0 && health === 0) {
@@ -170,7 +187,22 @@ export function createSpaceShooterSimulation() {
     return enemy.kind === "sineGunner" ? 5 : 1;
   };
 
-  const getTimeScale = () => clamp(1 + elapsedTime / 180, 1, maxTimeScale);
+  const getEnemyHealth = (kind: Enemy["kind"]) => {
+    const baseHealth = kind === "miniBoss" ? miniBossHealth : 1;
+    return Math.ceil(baseHealth * getTimeScale());
+  };
+
+  const getTimeScale = () => clamp(1 + elapsedTime / maxTimeScaleElapsedSeconds, 1, maxTimeScale);
+
+  const processLevelUps = (events: SimulationEvent[]) => {
+    while (score >= nextLevelScore) {
+      level += 1;
+      maxHealth += levelHealthBonus;
+      health = maxHealth;
+      nextLevelScore += getNextLevelScoreCost(score);
+      events.push({ type: "levelUp", health, level, maxHealth, nextLevelScore });
+    }
+  };
 
   const getSineGunnerFireInterval = () => randomRange(sineGunnerFireMin, sineGunnerFireMax) / getTimeScale();
 
@@ -234,12 +266,25 @@ export function createSpaceShooterSimulation() {
           enemyProjectiles.push(createEnemyProjectile(enemy));
         }
       } else if (enemy.kind === "miniBoss") {
-        if (enemy.beamTimeRemaining > 0) {
+        enemy.y = clamp(
+          enemy.baseY + Math.sin(enemy.age * miniBossDriftFrequency + enemy.phase) * miniBossDriftAmplitude,
+          bounds.bottom + 0.55,
+          bounds.top - 0.55
+        );
+
+        if (enemy.beamChargeTimeRemaining > 0) {
+          enemy.beamChargeTimeRemaining = Math.max(0, enemy.beamChargeTimeRemaining - delta);
+
+          if (enemy.beamChargeTimeRemaining <= 0) {
+            enemy.beamTimeRemaining = randomRange(miniBossBeamDurationMin, miniBossBeamDurationMax);
+            enemy.beamHasHitPlayer = false;
+          }
+        } else if (enemy.beamTimeRemaining > 0) {
           enemy.beamTimeRemaining = Math.max(0, enemy.beamTimeRemaining - delta);
 
           if (!enemy.beamHasHitPlayer && Math.abs(player.y - enemy.y) <= miniBossBeamHalfHeight) {
             enemy.beamHasHitPlayer = true;
-            damagePlayer(events);
+            damagePlayer(events, enemyBeamDamage);
           }
 
           if (enemy.beamTimeRemaining <= 0) {
@@ -250,7 +295,7 @@ export function createSpaceShooterSimulation() {
           enemy.fireTimer -= delta;
 
           if (enemy.fireTimer <= 0) {
-            enemy.beamTimeRemaining = randomRange(miniBossBeamDurationMin, miniBossBeamDurationMax);
+            enemy.beamChargeTimeRemaining = miniBossBeamChargeDuration;
             enemy.beamHasHitPlayer = false;
           }
         }
@@ -283,7 +328,7 @@ export function createSpaceShooterSimulation() {
         if (powerUp.kind === "shield") {
           shieldCharges += 1;
         } else if (powerUp.kind === "health") {
-          health = Math.min(maxHealth, health + 1);
+          health = Math.min(maxHealth, health + enemyCollisionDamage);
         } else {
           weaponPowerTimeRemaining = weaponPowerDuration;
         }
@@ -297,7 +342,7 @@ export function createSpaceShooterSimulation() {
 
       if (distance(projectile, player) < playerEnemyProjectileHitRadius) {
         enemyProjectiles.splice(projectileIndex, 1);
-        damagePlayer(events);
+        damagePlayer(events, enemyProjectileDamage);
       }
     }
 
@@ -306,7 +351,7 @@ export function createSpaceShooterSimulation() {
 
       if (enemy.kind !== "miniBoss" && distance(enemy, player) < playerEnemyHitRadius) {
         enemies.splice(enemyIndex, 1);
-        damagePlayer(events);
+        damagePlayer(events, enemyCollisionDamage);
         continue;
       }
 
@@ -329,6 +374,7 @@ export function createSpaceShooterSimulation() {
 
           enemies.splice(enemyIndex, 1);
           score += getEnemyScore(enemy);
+          processLevelUps(events);
           events.push({ type: "enemyDestroyed", position: destroyedPosition });
           break;
         }
@@ -373,6 +419,10 @@ function distance(a: Vector2, b: Vector2) {
 
 function randomRange(min: number, max: number) {
   return min + Math.random() * (max - min);
+}
+
+function getNextLevelScoreCost(totalScore: number) {
+  return Math.ceil(baseLevelScoreCost + totalScore * totalScoreLevelCostMultiplier);
 }
 
 function removeWhere<T>(items: T[], predicate: (item: T) => boolean) {

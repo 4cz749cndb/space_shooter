@@ -23,6 +23,7 @@ export type Enemy = Vector2 & {
   id: number;
   age: number;
   baseY: number;
+  beamChargeTimeRemaining: number;
   beamHasHitPlayer: boolean;
   beamTimeRemaining: number;
   fireTimer: number;
@@ -78,6 +79,13 @@ export type SimulationEvent =
       type: "shieldBlockedHit";
       position: Vector2;
       shieldCharges: number;
+    }
+  | {
+      type: "levelUp";
+      health: number;
+      level: number;
+      maxHealth: number;
+      nextLevelScore: number;
     };
 
 export type Snapshot = {
@@ -90,6 +98,8 @@ export type Snapshot = {
   elapsedTime: number;
   score: number;
   shieldCharges: number;
+  level: number;
+  nextLevelScore: number;
   timeScale: number;
   wave: number;
   weaponPowerTimeRemaining: number;

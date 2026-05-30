@@ -102,6 +102,10 @@ select {
   min-width: 210px;
 }
 
+.hud-level {
+  min-width: 140px;
+}
+
 .hud-health-header {
   display: flex;
   align-items: baseline;
@@ -148,11 +152,60 @@ select {
   font-weight: 700;
 }
 
+.hud-subvalue {
+  margin: 2px 0 0;
+  color: var(--warning);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .hud-bottom {
   align-self: center;
   color: var(--muted);
   font-size: 0.86rem;
   text-align: center;
+}
+
+.level-up-banner {
+  pointer-events: none;
+  position: absolute;
+  top: clamp(92px, 16vh, 150px);
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  min-width: min(360px, calc(100vw - 32px));
+  justify-items: center;
+  border: 1px solid rgba(255, 230, 109, 0.72);
+  border-radius: 8px;
+  background: rgba(5, 7, 13, 0.74);
+  box-shadow:
+    0 0 0 2px rgba(102, 227, 255, 0.22),
+    0 14px 34px rgba(0, 0, 0, 0.28);
+  padding: 10px 18px 12px;
+  text-align: center;
+  text-transform: uppercase;
+  transform: translateX(-50%);
+  animation: level-up-pop 1.8s ease both;
+  backdrop-filter: blur(8px);
+}
+
+.level-up-kicker {
+  color: var(--pixel-yellow);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.level-up-value {
+  color: var(--text);
+  font-size: clamp(1.35rem, 3vw, 2.1rem);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.level-up-bonus {
+  color: var(--pixel-green);
+  font-size: 0.76rem;
+  font-weight: 800;
 }
 
 .retro-screen {
@@ -601,6 +654,34 @@ select {
   }
 }
 
+@keyframes level-up-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -14px) scale(0.94);
+  }
+
+  12% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.03);
+  }
+
+  72% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .level-up-banner {
+    animation: none;
+  }
+}
+
 @media (max-width: 640px) {
   .game-shell {
     min-height: 100svh;
@@ -616,9 +697,17 @@ select {
     flex: 1 1 130px;
   }
 
+  .hud-level {
+    flex: 1 1 120px;
+  }
+
   .hud-health {
     width: 100%;
     flex-basis: 100%;
+  }
+
+  .level-up-banner {
+    top: 142px;
   }
 
   .hud-exit {
