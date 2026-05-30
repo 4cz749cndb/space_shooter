@@ -23,6 +23,7 @@ export type Enemy = Vector2 & {
   id: number;
   age: number;
   baseY: number;
+  beamChargeTimeRemaining: number;
   beamHasHitPlayer: boolean;
   beamTimeRemaining: number;
   fireTimer: number;
