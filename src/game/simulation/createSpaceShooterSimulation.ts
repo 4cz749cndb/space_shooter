@@ -39,7 +39,7 @@ const miniBossSpawnGracePeriod = 45;
 const miniBossDriftAmplitude = 0.55;
 const miniBossDriftFrequency = 1.05;
 const bossSpawnTime = 240;
-const bossHealth = 60;
+const bossHealth = 40;
 const bossScore = 250;
 const bossX = bounds.right - 0.5;
 const bossProjectileHitRadius = 0.82;
@@ -52,7 +52,7 @@ const bossBeamCooldownMax = 4.6;
 const bossMoveSpeed = 0.72;
 const bossTopGunYOffset = 0.52;
 const bossFrontGunOffsetX = -1.02;
-const maxTimeScale = 2;
+const maxTimeScale = 1.75;
 const maxTimeScaleElapsedSeconds = 240;
 const initialMaxHealth = 100;
 const firstLevelScore = 100;
@@ -305,7 +305,9 @@ export function createSpaceShooterSimulation() {
       removeWhere(enemies, (enemy) => enemy.kind !== "boss");
       enemyProjectiles.length = 0;
       spawnTimer = Number.POSITIVE_INFINITY;
-      enemies.push(createBoss());
+      const boss = createBoss();
+      enemies.push(boss);
+      events.push({ type: "bossSpawned", position: { x: boss.x, y: boss.y } });
     }
 
     if (!bossPhaseStarted && spawnTimer <= 0) {

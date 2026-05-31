@@ -93,6 +93,7 @@ export function GameClient() {
 
   const handleNewGame = () => {
     music.stop();
+    music.setBossMode(false);
     music.setIntensity(1);
     void music.start();
     clearLevelUpMessage();
@@ -104,6 +105,7 @@ export function GameClient() {
 
   const handleExit = () => {
     music.stop();
+    music.setBossMode(false);
     music.setIntensity(1);
     clearLevelUpMessage();
     setIsVictory(false);
@@ -115,6 +117,7 @@ export function GameClient() {
     const qualifiesForLeaderboard = victory || qualifiesForHighScores(finalSnapshot.score, highScores);
 
     music.stop();
+    music.setBossMode(false);
     music.setIntensity(1);
     clearLevelUpMessage();
     setIsVictory(victory);
@@ -125,6 +128,7 @@ export function GameClient() {
 
   const handleBackToMenu = () => {
     music.stop();
+    music.setBossMode(false);
     music.setIntensity(1);
     clearLevelUpMessage();
     setIsVictory(false);
@@ -155,9 +159,11 @@ export function GameClient() {
                 onTimeScaleChange={music.setIntensity}
                 onStopMusic={music.stop}
                 playBuzz={music.playBuzz}
+                playBossSpawn={music.playBossSpawn}
                 playExplosion={music.playExplosion}
                 playLevelUpTune={music.playLevelUpTune}
                 playPew={music.playPew}
+                setBossMusicMode={music.setBossMode}
               />
             </Canvas>
           </div>
@@ -195,10 +201,12 @@ function SpaceScene({
   onSnapshot,
   onTimeScaleChange,
   onStopMusic,
+  playBossSpawn,
   playBuzz,
   playExplosion,
   playLevelUpTune,
-  playPew
+  playPew,
+  setBossMusicMode
 }: {
   actions: ActionState;
   onGameOver: (snapshot: Snapshot, victory?: boolean) => void;
@@ -206,10 +214,12 @@ function SpaceScene({
   onSnapshot: (snapshot: Snapshot) => void;
   onTimeScaleChange: (timeScale: number) => void;
   onStopMusic: () => void;
+  playBossSpawn: () => void;
   playBuzz: () => void;
   playExplosion: (kind: ExplosionKind) => void;
   playLevelUpTune: () => void;
   playPew: () => void;
+  setBossMusicMode: (isBossMode: boolean) => void;
 }) {
   const simulation = useMemo(() => createSpaceShooterSimulation(), []);
   const playerRef = useRef<Mesh>(null);
@@ -306,6 +316,11 @@ function SpaceScene({
       if (event.type === "levelUp") {
         playLevelUpTune();
         onLevelUp(event.level);
+      }
+
+      if (event.type === "bossSpawned") {
+        setBossMusicMode(true);
+        playBossSpawn();
       }
 
       if (event.type === "playerDestroyed" && !gameOverRef.current) {

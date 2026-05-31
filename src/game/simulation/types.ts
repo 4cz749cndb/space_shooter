@@ -100,6 +100,10 @@ export type SimulationEvent =
       nextLevelScore: number;
     }
   | {
+      type: "bossSpawned";
+      position: Vector2;
+    }
+  | {
       type: "levelComplete";
       position: Vector2;
       score: number;

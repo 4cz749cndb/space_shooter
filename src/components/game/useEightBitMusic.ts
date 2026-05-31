@@ -9,6 +9,7 @@ export function useEightBitMusic() {
   const audioRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const gainConnectedRef = useRef(false);
+  const bossModeRef = useRef(false);
   const intensityRef = useRef(1);
   const noteIndexRef = useRef(0);
   const timerRef = useRef<number | null>(null);
@@ -17,15 +18,19 @@ export function useEightBitMusic() {
     () => [330, 392, 494, 392, 523, 494, 392, 294, 330, 392, 440, 392, 330, 262, 294, 330],
     []
   );
+  const bossMelody = useMemo(
+    () => [196, 196, 233, 196, 262, 247, 233, 175, 196, 220, 262, 294, 330, 294, 262, 220],
+    []
+  );
 
   const getMusicInterval = () => {
     const progress = clamp01(intensityRef.current - 1);
-    return 220 - progress * 75;
+    return bossModeRef.current ? 128 - progress * 24 : 220 - progress * 75;
   };
 
   const getMusicVolume = () => {
     const progress = clamp01(intensityRef.current - 1);
-    return 0.055 + progress * 0.025;
+    return bossModeRef.current ? 0.082 + progress * 0.018 : 0.055 + progress * 0.025;
   };
 
   const getMusicGain = (context: AudioContext) => {
@@ -67,6 +72,19 @@ export function useEightBitMusic() {
     gainRef.current.gain.linearRampToValueAtTime(getMusicVolume(), context.currentTime + 0.08);
   };
 
+  const setBossMode = (isBossMode: boolean) => {
+    if (bossModeRef.current === isBossMode) return;
+
+    bossModeRef.current = isBossMode;
+    noteIndexRef.current = 0;
+
+    const context = audioRef.current;
+    if (!context || !gainRef.current || timerRef.current === null) return;
+
+    gainRef.current.gain.cancelScheduledValues(context.currentTime);
+    gainRef.current.gain.linearRampToValueAtTime(getMusicVolume(), context.currentTime + 0.12);
+  };
+
   const start = async () => {
     if (timerRef.current !== null) return;
 
@@ -85,19 +103,36 @@ export function useEightBitMusic() {
       const oscillator = context.createOscillator();
       const noteGain = context.createGain();
       const intensityProgress = clamp01(intensityRef.current - 1);
-      const melodyIndex = noteIndexRef.current % melody.length;
-      const shouldLiftOctave = intensityProgress > 0.58 && noteIndexRef.current % 4 === 0;
-      const frequency = melody[melodyIndex] * (shouldLiftOctave ? 2 : 1);
+      const activeMelody = bossModeRef.current ? bossMelody : melody;
+      const melodyIndex = noteIndexRef.current % activeMelody.length;
+      const shouldLiftOctave = !bossModeRef.current && intensityProgress > 0.58 && noteIndexRef.current % 4 === 0;
+      const frequency = activeMelody[melodyIndex] * (shouldLiftOctave ? 2 : 1);
+      const noteLength = bossModeRef.current ? 0.14 : 0.18;
 
-      oscillator.type = "square";
+      oscillator.type = bossModeRef.current ? "sawtooth" : "square";
       oscillator.frequency.setValueAtTime(frequency, now);
       noteGain.gain.setValueAtTime(0, now);
-      noteGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
-      noteGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+      noteGain.gain.linearRampToValueAtTime(bossModeRef.current ? 0.46 : 0.5, now + 0.01);
+      noteGain.gain.exponentialRampToValueAtTime(0.001, now + noteLength);
       oscillator.connect(noteGain);
       noteGain.connect(gain);
       oscillator.start(now);
-      oscillator.stop(now + 0.2);
+      oscillator.stop(now + noteLength + 0.02);
+
+      if (bossModeRef.current && noteIndexRef.current % 2 === 0) {
+        const bassOscillator = context.createOscillator();
+        const bassGain = context.createGain();
+
+        bassOscillator.type = "square";
+        bassOscillator.frequency.setValueAtTime(frequency / 2, now);
+        bassGain.gain.setValueAtTime(0, now);
+        bassGain.gain.linearRampToValueAtTime(0.32, now + 0.012);
+        bassGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+        bassOscillator.connect(bassGain);
+        bassGain.connect(gain);
+        bassOscillator.start(now);
+        bassOscillator.stop(now + 0.24);
+      }
 
       noteIndexRef.current += 1;
       timerRef.current = window.setTimeout(playNote, getMusicInterval());
@@ -166,6 +201,35 @@ export function useEightBitMusic() {
       gain.connect(context.destination);
       oscillator.start(startTime);
       oscillator.stop(startTime + 0.2);
+    });
+  };
+
+  const playBossSpawn = () => {
+    const context = getAudioContext(audioRef);
+    if (!context) return;
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    const now = context.currentTime;
+    const notes = [98, 147, 196, 294];
+
+    notes.forEach((frequency, index) => {
+      const startTime = now + index * 0.105;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+
+      oscillator.type = index === notes.length - 1 ? "sawtooth" : "square";
+      oscillator.frequency.setValueAtTime(frequency, startTime);
+      oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.72, startTime + 0.28);
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(index === notes.length - 1 ? 0.24 : 0.18, startTime + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.32);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + 0.34);
     });
   };
 
@@ -246,7 +310,7 @@ export function useEightBitMusic() {
 
   useEffect(() => stop, []);
 
-  return { playBuzz, playExplosion, playLevelUpTune, playPew, playResultTune, setIntensity, start, stop };
+  return { playBossSpawn, playBuzz, playExplosion, playLevelUpTune, playPew, playResultTune, setBossMode, setIntensity, start, stop };
 }
 
 function getAudioContext(audioRef: MutableRefObject<AudioContext | null>) {
