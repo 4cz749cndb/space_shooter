@@ -88,12 +88,14 @@ export function RetroMenu({
 
 export function GameOverScreen({
   highScores,
+  isVictory = false,
   snapshot,
   onBackToMenu,
   onNewGame,
   onSubmitHighScore
 }: {
   highScores: HighScoreEntry[];
+  isVictory?: boolean;
   snapshot: Snapshot;
   onBackToMenu: () => void;
   onNewGame: () => void;
@@ -145,10 +147,10 @@ export function GameOverScreen({
   };
 
   return (
-    <RetroScreen ariaLabel="Game over">
+    <RetroScreen ariaLabel={isVictory ? "Mission complete" : "Game over"}>
       <div className="menu-stack game-over-stack">
-        <p className="menu-kicker">{qualifiesForLeaderboard ? "Mission Complete" : "Signal Lost"}</p>
-        <h1 className="menu-title">Game Over</h1>
+        <p className="menu-kicker">{isVictory ? "Boss Destroyed" : qualifiesForLeaderboard ? "Mission Complete" : "Signal Lost"}</p>
+        <h1 className="menu-title">{isVictory ? "Victory" : "Game Over"}</h1>
         <div className="final-run-stats" aria-label="Final run stats">
           <p>
             Final Score <span>{snapshot.score}</span>

@@ -7,7 +7,7 @@ import { GameOverScreen, RetroMenu } from "@/components/game/GameScreens";
 import { type ExplosionKind, useEightBitMusic } from "@/components/game/useEightBitMusic";
 import { useHighScores } from "@/components/game/useHighScores";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
-import type { ActionState, Enemy, PowerUpKind, Snapshot } from "@/game/simulation/types";
+import type { ActionState, Enemy, EnemyBeam, PowerUpKind, Snapshot, Vector2 } from "@/game/simulation/types";
 import { qualifiesForHighScores } from "@/lib/highScores";
 
 type GamePhase = "menu" | "playing" | "gameOver" | "exited" | "highScores";
@@ -52,6 +52,7 @@ const hudSnapshotInterval = 1 / 12;
 export function GameClient() {
   const [phase, setPhase] = useState<GamePhase>("menu");
   const [gameKey, setGameKey] = useState(0);
+  const [isVictory, setIsVictory] = useState(false);
   const [levelUpMessage, setLevelUpMessage] = useState<LevelUpMessage | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
   const levelUpMessageIdRef = useRef(1);
@@ -95,6 +96,7 @@ export function GameClient() {
     music.setIntensity(1);
     void music.start();
     clearLevelUpMessage();
+    setIsVictory(false);
     setSnapshot(initialSnapshot);
     setGameKey((key) => key + 1);
     setPhase("playing");
@@ -104,16 +106,18 @@ export function GameClient() {
     music.stop();
     music.setIntensity(1);
     clearLevelUpMessage();
+    setIsVictory(false);
     setSnapshot(initialSnapshot);
     setPhase("exited");
   };
 
-  const handleGameOver = (finalSnapshot: Snapshot) => {
-    const qualifiesForLeaderboard = qualifiesForHighScores(finalSnapshot.score, highScores);
+  const handleGameOver = (finalSnapshot: Snapshot, victory = false) => {
+    const qualifiesForLeaderboard = victory || qualifiesForHighScores(finalSnapshot.score, highScores);
 
     music.stop();
     music.setIntensity(1);
     clearLevelUpMessage();
+    setIsVictory(victory);
     setSnapshot(finalSnapshot);
     setPhase("gameOver");
     void music.playResultTune(qualifiesForLeaderboard ? "happy" : "sad");
@@ -123,6 +127,7 @@ export function GameClient() {
     music.stop();
     music.setIntensity(1);
     clearLevelUpMessage();
+    setIsVictory(false);
     setSnapshot(initialSnapshot);
     setPhase("menu");
   };
@@ -162,6 +167,7 @@ export function GameClient() {
       ) : phase === "gameOver" ? (
         <GameOverScreen
           highScores={highScores}
+          isVictory={isVictory}
           snapshot={snapshot}
           onBackToMenu={handleBackToMenu}
           onNewGame={handleNewGame}
@@ -195,7 +201,7 @@ function SpaceScene({
   playPew
 }: {
   actions: ActionState;
-  onGameOver: (snapshot: Snapshot) => void;
+  onGameOver: (snapshot: Snapshot, victory?: boolean) => void;
   onLevelUp: (level: number) => void;
   onSnapshot: (snapshot: Snapshot) => void;
   onTimeScaleChange: (timeScale: number) => void;
@@ -318,6 +324,22 @@ function SpaceScene({
         });
         gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot), 700);
       }
+
+      if (event.type === "levelComplete" && !gameOverRef.current) {
+        gameOverRef.current = true;
+        lastHudSnapshotRef.current = snapshot;
+        lastHudUpdateTimeRef.current = elapsedTime;
+        onSnapshot(snapshot);
+        onStopMusic();
+        playExplosion("enemy");
+        nextExplosions.push({
+          id: explosionIdRef.current++,
+          kind: "enemy",
+          x: event.position.x,
+          y: event.position.y
+        });
+        gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot, true), 900);
+      }
     }
 
     if (nextExplosions.length > 0) {
@@ -353,7 +375,9 @@ function SpaceScene({
         </mesh>
       ))}
       {sceneSnapshot.enemies.map((enemy) =>
-        enemy.kind === "miniBoss" ? (
+        enemy.kind === "boss" ? (
+          <BossEnemy key={enemy.id} enemy={enemy} />
+        ) : enemy.kind === "miniBoss" ? (
           <MiniBossEnemy key={enemy.id} enemy={enemy} />
         ) : (
           <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
@@ -363,7 +387,7 @@ function SpaceScene({
         )
       )}
       {sceneSnapshot.enemyBeams.map((beam) => (
-        <EnemyBeamEffect key={beam.id} y={beam.y} />
+        <EnemyBeamEffect beam={beam} key={beam.id} />
       ))}
       {sceneSnapshot.enemyProjectiles.map((projectile) => (
         <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
@@ -465,7 +489,62 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
   );
 }
 
-function EnemyBeamEffect({ y }: { y: number }) {
+function BossEnemy({ enemy }: { enemy: Enemy }) {
+  const groupRef = useRef<Group>(null);
+  const chargeGlowRef = useRef<MeshBasicMaterial>(null);
+  const elapsedTimeRef = useRef(0);
+  const isBeamCharging = enemy.beamChargeTimeRemaining > 0;
+  const isBeamActive = enemy.beamTimeRemaining > 0;
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+
+    elapsedTimeRef.current += delta;
+    groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 1.6) * 0.025;
+    groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 3) * 0.012);
+
+    if (chargeGlowRef.current) {
+      chargeGlowRef.current.opacity = isBeamCharging ? 0.26 + Math.sin(elapsedTimeRef.current * 24) * 0.12 : 0;
+    }
+  });
+
+  return (
+    <group ref={groupRef} position={[enemy.x, enemy.y, 0.04]}>
+      <mesh position={[-0.88, 0, -0.04]}>
+        <circleGeometry args={[0.46, 18]} />
+        <meshBasicMaterial ref={chargeGlowRef} color="#ffe66d" transparent opacity={0} />
+      </mesh>
+      <mesh position={[0, -0.06, 0]}>
+        <boxGeometry args={[1.88, 0.42, 0.14]} />
+        <meshBasicMaterial color="#8a6dff" />
+      </mesh>
+      <mesh position={[-0.18, 0.18, 0.04]}>
+        <boxGeometry args={[1.2, 0.42, 0.16]} />
+        <meshBasicMaterial color="#66e3ff" transparent opacity={0.92} />
+      </mesh>
+      <mesh position={[0.25, 0.42, 0.07]}>
+        <boxGeometry args={[0.56, 0.3, 0.16]} />
+        <meshBasicMaterial color="#eef7ff" transparent opacity={0.8} />
+      </mesh>
+      <mesh position={[-0.95, -0.04, 0.09]}>
+        <boxGeometry args={[0.38, 0.18, 0.18]} />
+        <meshBasicMaterial color={isBeamActive ? "#ff2f7d" : isBeamCharging ? "#ffe66d" : "#ffbf69"} />
+      </mesh>
+      <mesh position={[-0.18, 0.74, 0.08]}>
+        <boxGeometry args={[0.26, 0.4, 0.14]} />
+        <meshBasicMaterial color="#8cff98" />
+      </mesh>
+      {[-0.64, -0.2, 0.24, 0.68].map((x, index) => (
+        <mesh key={x} position={[x, -0.32, 0.08]}>
+          <boxGeometry args={[0.22, 0.16, 0.14]} />
+          <meshBasicMaterial color={index % 2 === 0 ? "#ffe66d" : "#ff5d73"} transparent opacity={0.88} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function EnemyBeamEffect({ beam }: { beam: EnemyBeam }) {
   const groupRef = useRef<Group>(null);
   const elapsedTimeRef = useRef(0);
 
@@ -477,8 +556,31 @@ function EnemyBeamEffect({ y }: { y: number }) {
     groupRef.current.scale.y = pulse;
   });
 
+  if (beam.kind === "aimed") {
+    const length = distance2D(beam.start, beam.end);
+    const center = midpoint2D(beam.start, beam.end);
+    const angle = Math.atan2(beam.end.y - beam.start.y, beam.end.x - beam.start.x);
+
+    return (
+      <group ref={groupRef} position={[center.x, center.y, 0.05]} rotation={[0, 0, angle]}>
+        <mesh>
+          <boxGeometry args={[length, 0.44, 0.02]} />
+          <meshBasicMaterial color="#ff2f7d" transparent opacity={0.24} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[length, 0.2, 0.03]} />
+          <meshBasicMaterial color="#ff5d73" transparent opacity={0.74} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[length, 0.06, 0.04]} />
+          <meshBasicMaterial color="#eef7ff" transparent opacity={0.92} />
+        </mesh>
+      </group>
+    );
+  }
+
   return (
-    <group ref={groupRef} position={[0, y, 0.04]}>
+    <group ref={groupRef} position={[0, beam.y, 0.04]}>
       <mesh>
         <boxGeometry args={[8.4, 0.72, 0.02]} />
         <meshBasicMaterial color="#ff2f7d" transparent opacity={0.28} />
@@ -851,6 +953,17 @@ function seededRange(seed: number, min: number, max: number) {
 
 function seededUnit(seed: number) {
   return fract(Math.sin(seed * 12.9898) * 43758.5453);
+}
+
+function distance2D(a: Vector2, b: Vector2) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function midpoint2D(a: Vector2, b: Vector2) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
+  };
 }
 
 function fract(value: number) {

@@ -17,25 +17,37 @@ export type Projectile = Vector2 & {
   velocityY: number;
 };
 
-export type EnemyKind = "basic" | "sineGunner" | "miniBoss";
+export type EnemyKind = "basic" | "sineGunner" | "miniBoss" | "boss";
 
 export type Enemy = Vector2 & {
   id: number;
   age: number;
   baseY: number;
+  beamStart: Vector2 | null;
   beamChargeTimeRemaining: number;
   beamHasHitPlayer: boolean;
+  beamCooldownTimer: number;
+  beamTarget: Vector2 | null;
   beamTimeRemaining: number;
   fireTimer: number;
   health: number;
   kind: EnemyKind;
   phase: number;
+  targetY: number;
 };
 
-export type EnemyBeam = {
-  id: number;
-  y: number;
-};
+export type EnemyBeam =
+  | {
+      id: number;
+      kind: "horizontal";
+      y: number;
+    }
+  | {
+      end: Vector2;
+      id: number;
+      kind: "aimed";
+      start: Vector2;
+    };
 
 export type EnemyProjectile = Vector2 & {
   id: number;
@@ -86,6 +98,11 @@ export type SimulationEvent =
       level: number;
       maxHealth: number;
       nextLevelScore: number;
+    }
+  | {
+      type: "levelComplete";
+      position: Vector2;
+      score: number;
     };
 
 export type Snapshot = {
