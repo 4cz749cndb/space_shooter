@@ -1,4 +1,16 @@
-import type { ActionState, Enemy, EnemyBeam, EnemyProjectile, PowerUp, Projectile, SimulationEvent, Snapshot, Vector2 } from "./types";
+import type {
+  ActionState,
+  Enemy,
+  EnemyBeam,
+  EnemyProjectile,
+  GroundProfile,
+  PowerUp,
+  Projectile,
+  SimulationEvent,
+  SimulationInitialProgress,
+  Snapshot,
+  Vector2
+} from "./types";
 
 const bounds = {
   left: -3.6,
@@ -17,6 +29,14 @@ const enemyProjectileHitRadius = 0.29;
 const playerEnemyHitRadius = 0.38;
 const playerEnemyProjectileHitRadius = 0.24;
 const playerPowerUpHitRadius = 0.44;
+const playerGroundHitRadius = 0.3;
+const groundHitCooldown = 0.75;
+const groundScrollSpeedMultiplier = 0.5;
+const groundPointSpacing = 0.76;
+const groundOffscreenBuffer = 2.8;
+const groundHeightMin = -2.9;
+const groundHeightMax = -1.92;
+const groundHeightMaxStep = 0.58;
 const powerUpSpawnMin = 12;
 const powerUpSpawnMax = 20;
 const weaponPowerDuration = 15;
@@ -38,6 +58,15 @@ const miniBossFireMax = 5;
 const miniBossSpawnGracePeriod = 45;
 const miniBossDriftAmplitude = 0.55;
 const miniBossDriftFrequency = 1.05;
+const turretHealth = 4;
+const turretScore = 10;
+const turretBeamDuration = 2;
+const turretBeamHalfWidth = 0.13;
+const turretBeamInterval = 1;
+const turretChargeDuration = 0.28;
+const turretBurstSize = 3;
+const turretIdleDuration = 3;
+const turretYOffset = 0.32;
 const bossSpawnTime = 240;
 const bossHealth = 40;
 const bossScore = 250;
@@ -54,6 +83,10 @@ const bossTopGunYOffset = 0.52;
 const bossFrontGunOffsetX = -1.02;
 const maxTimeScale = 1.75;
 const maxTimeScaleElapsedSeconds = 240;
+const gameSpeedDifficultyFactor = 0.75;
+const spawnRateDifficultyFactor = 1.35;
+const enemyFireDifficultyFactor = 1.45;
+const enemyHealthDifficultyFactor = 1;
 const initialMaxHealth = 100;
 const firstLevelScore = 100;
 const baseLevelScoreCost = 100;
@@ -63,22 +96,32 @@ const enemyCollisionDamage = 20;
 const enemyProjectileDamage = 10;
 const enemyBeamDamage = 10;
 
-export function createSpaceShooterSimulation() {
+type SimulationOptions = {
+  difficultyMultiplier?: number;
+  ground?: GroundProfile;
+  turretsEnabled?: boolean;
+};
+
+export function createSpaceShooterSimulation(initialProgress?: Partial<SimulationInitialProgress>, options: SimulationOptions = {}) {
+  const difficultyMultiplier = options.difficultyMultiplier ?? 1;
+  const groundPoints = options.ground?.points.map((point) => ({ ...point }));
+  const turretsEnabled = Boolean(options.turretsEnabled && groundPoints);
   let nextId = 1;
-  let score = 0;
-  let wave = 1;
-  let level = 1;
-  let nextLevelScore = firstLevelScore;
-  let maxHealth = initialMaxHealth;
-  let health = maxHealth;
-  let shieldCharges = 0;
+  let score = initialProgress?.score ?? 0;
+  let level = initialProgress?.level ?? 1;
+  let nextLevelScore = initialProgress?.nextLevelScore ?? firstLevelScore;
+  let maxHealth = initialProgress?.maxHealth ?? initialMaxHealth;
+  let health = initialProgress?.health ?? maxHealth;
+  let shieldCharges = initialProgress?.shieldCharges ?? 0;
   let weaponPowerTimeRemaining = 0;
-  let elapsedTime = 0;
+  let elapsedTime = initialProgress?.elapsedTime ?? 0;
+  let stageElapsedTime = 0;
   let fireTimer = 0;
+  let groundHitTimer = 0;
   let spawnTimer = 0;
   let powerUpSpawnTimer = randomRange(powerUpSpawnMin, powerUpSpawnMax);
   let bossPhaseStarted = false;
-  let levelComplete = false;
+  let stageComplete = false;
   const player: Vector2 = { x: -2.8, y: 0 };
   const projectiles: Projectile[] = [];
   const enemies: Enemy[] = [];
@@ -88,19 +131,35 @@ export function createSpaceShooterSimulation() {
   const getSnapshot = (events: SimulationEvent[] = []): Snapshot => ({
     player: { ...player },
     projectiles: projectiles.map((projectile) => ({ ...projectile })),
-    enemies: enemies.map((enemy) => ({ ...enemy })),
+    enemies: enemies.map((enemy) => ({
+      ...enemy,
+      turretBeams: enemy.turretBeams.map((beam) => ({
+        ...beam,
+        start: { ...beam.start },
+        target: { ...beam.target }
+      }))
+    })),
     enemyProjectiles: enemyProjectiles.map((projectile) => ({ ...projectile })),
     enemyBeams: enemies
-      .filter((enemy) => enemy.beamTimeRemaining > 0)
+      .filter((enemy) => enemy.beamTimeRemaining > 0 || enemy.turretBeams.length > 0)
       .flatMap((enemy): EnemyBeam[] => {
         if (enemy.kind === "miniBoss") {
           return [{ id: enemy.id, kind: "horizontal" as const, y: enemy.y }];
         }
 
+        if (enemy.kind === "turret") {
+          return enemy.turretBeams.map((beam) => ({
+            end: getBeamEnd(beam.start, beam.target),
+            id: beam.id,
+            kind: "aimed" as const,
+            start: { ...beam.start }
+          }));
+        }
+
         if (enemy.kind === "boss" && enemy.beamStart && enemy.beamTarget) {
           return [
             {
-              end: getBossBeamEnd(enemy.beamStart, enemy.beamTarget),
+              end: getBeamEnd(enemy.beamStart, enemy.beamTarget),
               id: enemy.id,
               kind: "aimed" as const,
               start: { ...enemy.beamStart }
@@ -111,13 +170,13 @@ export function createSpaceShooterSimulation() {
         return [];
       }),
     powerUps: powerUps.map((powerUp) => ({ ...powerUp })),
+    ground: groundPoints ? { points: groundPoints.map((point) => ({ ...point })) } : null,
     elapsedTime,
     score,
     shieldCharges,
     level,
     nextLevelScore,
-    timeScale: getTimeScale(),
-    wave,
+    timeScale: getGameSpeedScale(),
     weaponPowerTimeRemaining,
     health,
     maxHealth,
@@ -126,9 +185,20 @@ export function createSpaceShooterSimulation() {
 
   const createEnemy = (): Enemy => {
     const hasMiniBoss = enemies.some((enemy) => enemy.kind === "miniBoss");
-    const canSpawnMiniBoss = elapsedTime >= miniBossSpawnGracePeriod && !hasMiniBoss;
-    const kind = canSpawnMiniBoss && Math.random() < miniBossChance ? "miniBoss" : Math.random() < sineGunnerChance ? "sineGunner" : "basic";
+    const hasTurret = enemies.some((enemy) => enemy.kind === "turret");
+    const canSpawnMiniBoss = stageElapsedTime >= miniBossSpawnGracePeriod && !hasMiniBoss;
+    const canSpawnTurret = turretsEnabled && stageElapsedTime >= miniBossSpawnGracePeriod && !hasTurret;
+    const kind =
+      canSpawnTurret && Math.random() < miniBossChance
+        ? "turret"
+        : canSpawnMiniBoss && Math.random() < miniBossChance
+          ? "miniBoss"
+          : Math.random() < sineGunnerChance
+            ? "sineGunner"
+            : "basic";
     const baseY = randomRange(bounds.bottom + 0.8, bounds.top - 0.8);
+    const x = kind === "miniBoss" ? bounds.right - 0.42 : kind === "turret" ? bounds.right + 0.4 : bounds.right + 0.4;
+    const y = kind === "turret" ? getTurretY(x, groundPoints) : baseY;
 
     return {
       id: nextId++,
@@ -145,13 +215,19 @@ export function createSpaceShooterSimulation() {
           ? getSineGunnerFireInterval()
           : kind === "miniBoss"
             ? randomRange(miniBossFireMin, miniBossFireMax)
-            : Number.POSITIVE_INFINITY,
+            : kind === "turret"
+              ? turretBeamInterval
+              : Number.POSITIVE_INFINITY,
       health: getEnemyHealth(kind),
       kind,
       phase: randomRange(0, Math.PI * 2),
       targetY: baseY,
-      x: kind === "miniBoss" ? bounds.right - 0.42 : bounds.right + 0.4,
-      y: baseY
+      turretBeams: [],
+      turretBurstShotsFired: 0,
+      turretChargeTimeRemaining: 0,
+      turretIdleTimer: 0,
+      x,
+      y
     };
   };
 
@@ -173,6 +249,10 @@ export function createSpaceShooterSimulation() {
       kind: "boss",
       phase: randomRange(0, Math.PI * 2),
       targetY: randomBossTargetY(),
+      turretBeams: [],
+      turretBurstShotsFired: 0,
+      turretChargeTimeRemaining: 0,
+      turretIdleTimer: 0,
       x: bossX,
       y: baseY
     };
@@ -245,17 +325,29 @@ export function createSpaceShooterSimulation() {
   const getEnemyScore = (enemy: Enemy) => {
     if (enemy.kind === "boss") return bossScore;
     if (enemy.kind === "miniBoss") return miniBossScore;
+    if (enemy.kind === "turret") return turretScore;
     return enemy.kind === "sineGunner" ? 5 : 1;
   };
 
   const getEnemyHealth = (kind: Enemy["kind"]) => {
     if (kind === "boss") return bossHealth;
+    if (kind === "turret") return turretHealth;
 
     const baseHealth = kind === "miniBoss" ? miniBossHealth : 1;
-    return Math.ceil(baseHealth * getTimeScale());
+    return Math.ceil(baseHealth * getEnemyHealthScale());
   };
 
-  const getTimeScale = () => clamp(1 + elapsedTime / maxTimeScaleElapsedSeconds, 1, maxTimeScale);
+  const getDifficultyScale = (factor: number) => 1 + getElapsedDifficultyProgress() * (maxTimeScale - 1) * factor * difficultyMultiplier;
+
+  const getElapsedDifficultyProgress = () => clamp(stageElapsedTime / maxTimeScaleElapsedSeconds, 0, 1);
+
+  const getEnemyFireScale = () => getDifficultyScale(enemyFireDifficultyFactor);
+
+  const getEnemyHealthScale = () => getDifficultyScale(enemyHealthDifficultyFactor);
+
+  const getGameSpeedScale = () => getDifficultyScale(gameSpeedDifficultyFactor);
+
+  const getSpawnRateScale = () => getDifficultyScale(spawnRateDifficultyFactor);
 
   const processLevelUps = (events: SimulationEvent[]) => {
     while (score >= nextLevelScore) {
@@ -267,30 +359,36 @@ export function createSpaceShooterSimulation() {
     }
   };
 
-  const getSineGunnerFireInterval = () => randomRange(sineGunnerFireMin, sineGunnerFireMax) / getTimeScale();
+  const getSineGunnerFireInterval = () => randomRange(sineGunnerFireMin, sineGunnerFireMax) / getEnemyFireScale();
 
   const step = (delta: number, actions: ActionState): Snapshot => {
-    if (health <= 0 || levelComplete) {
+    if (health <= 0 || stageComplete) {
       return getSnapshot();
     }
 
     const events: SimulationEvent[] = [];
     elapsedTime += delta;
-    const timeScale = getTimeScale();
+    stageElapsedTime += delta;
+    const gameSpeedScale = getGameSpeedScale();
+    const spawnRateScale = getSpawnRateScale();
+    const enemyFireScale = getEnemyFireScale();
     const horizontal = Number(actions.right) - Number(actions.left);
     const vertical = Number(actions.up) - Number(actions.down);
     const length = Math.hypot(horizontal, vertical) || 1;
 
     player.x = clamp(player.x + (horizontal / length) * playerSpeed * delta, bounds.left, bounds.right);
     player.y = clamp(player.y + (vertical / length) * playerSpeed * delta, bounds.bottom, bounds.top);
+    updateGround(gameSpeedScale, delta);
+    groundHitTimer = Math.max(0, groundHitTimer - delta);
+    resolveGroundCollision(events);
 
     fireTimer -= delta;
     weaponPowerTimeRemaining = Math.max(0, weaponPowerTimeRemaining - delta);
-    spawnTimer -= delta * timeScale;
-    powerUpSpawnTimer -= delta * timeScale;
+    spawnTimer -= delta * spawnRateScale;
+    powerUpSpawnTimer -= delta * gameSpeedScale;
 
     for (const powerUp of powerUps) {
-      powerUp.x -= (enemySpeed + wave * 0.08) * timeScale * delta;
+      powerUp.x -= enemySpeed * gameSpeedScale * delta;
     }
 
     resolvePowerUpCollisions(events);
@@ -300,7 +398,7 @@ export function createSpaceShooterSimulation() {
       firePlayerWeapon(events);
     }
 
-    if (!bossPhaseStarted && elapsedTime >= bossSpawnTime) {
+    if (!bossPhaseStarted && stageElapsedTime >= bossSpawnTime) {
       bossPhaseStarted = true;
       removeWhere(enemies, (enemy) => enemy.kind !== "boss");
       enemyProjectiles.length = 0;
@@ -311,7 +409,7 @@ export function createSpaceShooterSimulation() {
     }
 
     if (!bossPhaseStarted && spawnTimer <= 0) {
-      spawnTimer = Math.max(0.32, spawnInterval - wave * 0.04);
+      spawnTimer = spawnInterval;
       enemies.push(createEnemy());
     }
 
@@ -326,10 +424,10 @@ export function createSpaceShooterSimulation() {
     }
 
     for (const enemy of enemies) {
-      enemy.age += enemy.kind === "miniBoss" || enemy.kind === "boss" ? delta : timeScale * delta;
+      enemy.age += enemy.kind === "miniBoss" || enemy.kind === "boss" || enemy.kind === "turret" ? delta : gameSpeedScale * delta;
 
-      if (enemy.kind !== "miniBoss" && enemy.kind !== "boss") {
-        enemy.x -= (enemySpeed + wave * 0.08) * timeScale * delta;
+      if (enemy.kind !== "miniBoss" && enemy.kind !== "boss" && enemy.kind !== "turret") {
+        enemy.x -= enemySpeed * gameSpeedScale * delta;
       }
 
       if (enemy.kind === "sineGunner") {
@@ -371,7 +469,7 @@ export function createSpaceShooterSimulation() {
             enemy.beamHasHitPlayer = false;
           }
         } else {
-          enemy.fireTimer -= delta;
+          enemy.fireTimer -= delta * enemyFireScale;
 
           if (enemy.fireTimer <= 0) {
             enemy.beamChargeTimeRemaining = miniBossBeamChargeDuration;
@@ -380,17 +478,18 @@ export function createSpaceShooterSimulation() {
         }
       } else if (enemy.kind === "boss") {
         updateBoss(enemy, delta, events);
+      } else if (enemy.kind === "turret") {
+        updateTurret(enemy, gameSpeedScale, delta, events);
       }
     }
 
     for (const projectile of enemyProjectiles) {
-      projectile.x += projectile.velocityX * timeScale * delta;
-      projectile.y += projectile.velocityY * timeScale * delta;
+      projectile.x += projectile.velocityX * gameSpeedScale * delta;
+      projectile.y += projectile.velocityY * gameSpeedScale * delta;
     }
 
     resolveCollisions(events);
     pruneOffscreen();
-    wave = Math.floor(score / 12) + 1;
 
     return getSnapshot(events);
   };
@@ -416,6 +515,44 @@ export function createSpaceShooterSimulation() {
     }
   };
 
+  const resolveGroundCollision = (events: SimulationEvent[]) => {
+    if (!groundPoints) return;
+
+    const groundHeight = getGroundHeightAtX(player.x, groundPoints);
+    const minPlayerY = groundHeight + playerGroundHitRadius;
+
+    if (player.y >= minPlayerY) return;
+
+    player.y = minPlayerY;
+
+    if (groundHitTimer > 0) return;
+
+    groundHitTimer = groundHitCooldown;
+    damagePlayer(events, Math.ceil(maxHealth / 3));
+  };
+
+  const updateGround = (gameSpeedScale: number, delta: number) => {
+    if (!groundPoints) return;
+
+    const scrollAmount = enemySpeed * groundScrollSpeedMultiplier * gameSpeedScale * delta;
+
+    for (const point of groundPoints) {
+      point.x -= scrollAmount;
+    }
+
+    while (groundPoints.length > 2 && groundPoints[1].x < bounds.left - groundOffscreenBuffer) {
+      groundPoints.shift();
+    }
+
+    while (groundPoints[groundPoints.length - 1].x < bounds.right + groundOffscreenBuffer + groundPointSpacing) {
+      const previousPoint = groundPoints[groundPoints.length - 1];
+      groundPoints.push({
+        x: previousPoint.x + groundPointSpacing,
+        y: getNextGroundHeight(previousPoint.y)
+      });
+    }
+  };
+
   const resolveCollisions = (events: SimulationEvent[]) => {
     for (let projectileIndex = enemyProjectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
       const projectile = enemyProjectiles[projectileIndex];
@@ -434,7 +571,7 @@ export function createSpaceShooterSimulation() {
         continue;
       }
 
-      if (enemy.kind !== "miniBoss" && enemy.kind !== "boss" && distance(enemy, player) < playerEnemyHitRadius) {
+      if (enemy.kind !== "miniBoss" && enemy.kind !== "boss" && enemy.kind !== "turret" && distance(enemy, player) < playerEnemyHitRadius) {
         enemies.splice(enemyIndex, 1);
         damagePlayer(events, enemyCollisionDamage);
         continue;
@@ -450,7 +587,7 @@ export function createSpaceShooterSimulation() {
           const destroyedPosition = { ...enemy };
           projectiles.splice(projectileIndex, 1);
 
-          if (enemy.kind === "miniBoss" || enemy.kind === "boss") {
+          if (enemy.kind === "miniBoss" || enemy.kind === "boss" || enemy.kind === "turret") {
             enemy.health -= 1;
 
             if (enemy.health > 0) {
@@ -464,8 +601,8 @@ export function createSpaceShooterSimulation() {
           events.push({ type: "enemyDestroyed", position: destroyedPosition });
 
           if (enemy.kind === "boss") {
-            levelComplete = true;
-            events.push({ type: "levelComplete", position: destroyedPosition, score });
+            stageComplete = true;
+            events.push({ type: "stageComplete", position: destroyedPosition, score });
           }
 
           break;
@@ -500,6 +637,66 @@ export function createSpaceShooterSimulation() {
     step
   };
 
+  function updateTurret(enemy: Enemy, gameSpeedScale: number, delta: number, events: SimulationEvent[]) {
+    enemy.x -= enemySpeed * groundScrollSpeedMultiplier * gameSpeedScale * delta;
+    enemy.y = getTurretY(enemy.x, groundPoints);
+
+    for (let beamIndex = enemy.turretBeams.length - 1; beamIndex >= 0; beamIndex -= 1) {
+      const beam = enemy.turretBeams[beamIndex];
+      beam.timeRemaining = Math.max(0, beam.timeRemaining - delta);
+
+      if (
+        !beam.hasHitPlayer &&
+        isPointNearLineSegment(player, beam.start, getBeamEnd(beam.start, beam.target), turretBeamHalfWidth)
+      ) {
+        beam.hasHitPlayer = true;
+        damagePlayer(events, enemyBeamDamage);
+      }
+
+      if (beam.timeRemaining <= 0) {
+        enemy.turretBeams.splice(beamIndex, 1);
+      }
+    }
+
+    if (enemy.turretIdleTimer > 0) {
+      enemy.turretChargeTimeRemaining = 0;
+      enemy.turretIdleTimer = Math.max(0, enemy.turretIdleTimer - delta);
+
+      if (enemy.turretIdleTimer <= 0) {
+        enemy.turretBurstShotsFired = 0;
+        enemy.fireTimer = turretBeamInterval;
+      }
+
+      return;
+    }
+
+    if (enemy.turretBurstShotsFired >= turretBurstSize) {
+      enemy.turretChargeTimeRemaining = 0;
+      if (enemy.turretBeams.length === 0) {
+        enemy.turretIdleTimer = turretIdleDuration;
+      }
+
+      return;
+    }
+
+    enemy.fireTimer -= delta;
+    enemy.turretChargeTimeRemaining =
+      enemy.fireTimer > 0 && enemy.fireTimer <= turretChargeDuration ? enemy.fireTimer : 0;
+
+    if (enemy.fireTimer <= 0) {
+      enemy.fireTimer = turretBeamInterval;
+      enemy.turretChargeTimeRemaining = 0;
+      enemy.turretBurstShotsFired += 1;
+      enemy.turretBeams.push({
+        hasHitPlayer: false,
+        id: nextId++,
+        start: getTurretBeamStart(enemy),
+        target: { ...player },
+        timeRemaining: turretBeamDuration
+      });
+    }
+  }
+
   function updateBoss(enemy: Enemy, delta: number, events: SimulationEvent[]) {
     enemy.x = bossX;
     enemy.y = moveToward(enemy.y, enemy.targetY, bossMoveSpeed * delta);
@@ -526,7 +723,7 @@ export function createSpaceShooterSimulation() {
     } else if (enemy.beamTimeRemaining > 0) {
       enemy.beamTimeRemaining = Math.max(0, enemy.beamTimeRemaining - delta);
 
-      if (!enemy.beamHasHitPlayer && enemy.beamStart && enemy.beamTarget && isPointNearLineSegment(player, enemy.beamStart, getBossBeamEnd(enemy.beamStart, enemy.beamTarget), bossBeamHalfWidth)) {
+      if (!enemy.beamHasHitPlayer && enemy.beamStart && enemy.beamTarget && isPointNearLineSegment(player, enemy.beamStart, getBeamEnd(enemy.beamStart, enemy.beamTarget), bossBeamHalfWidth)) {
         enemy.beamHasHitPlayer = true;
         damagePlayer(events, enemyBeamDamage);
       }
@@ -560,15 +757,44 @@ function randomRange(min: number, max: number) {
   return min + Math.random() * (max - min);
 }
 
+function getGroundHeightAtX(x: number, points: Vector2[]) {
+  if (points.length === 0) return bounds.bottom;
+  if (x <= points[0].x) return points[0].y;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const end = points[index];
+    const start = points[index - 1];
+
+    if (x <= end.x) {
+      const progress = (x - start.x) / (end.x - start.x || 1);
+      return start.y + (end.y - start.y) * progress;
+    }
+  }
+
+  return points[points.length - 1].y;
+}
+
+function getNextGroundHeight(previousHeight: number) {
+  return clamp(previousHeight + randomRange(-groundHeightMaxStep, groundHeightMaxStep), groundHeightMin, groundHeightMax);
+}
+
 function randomBossTargetY() {
   return randomRange(bounds.bottom + 0.8, bounds.top - 0.8);
+}
+
+function getTurretY(x: number, groundPoints: Vector2[] | undefined) {
+  return getGroundHeightAtX(x, groundPoints ?? []) + turretYOffset;
+}
+
+function getTurretBeamStart(enemy: Enemy): Vector2 {
+  return { x: enemy.x - 0.08, y: enemy.y + 0.24 };
 }
 
 function getBossBeamStart(enemy: Enemy): Vector2 {
   return { x: enemy.x + bossFrontGunOffsetX, y: enemy.y };
 }
 
-function getBossBeamEnd(start: Vector2, target: Vector2): Vector2 {
+function getBeamEnd(start: Vector2, target: Vector2): Vector2 {
   const deltaX = target.x - start.x;
   const deltaY = target.y - start.y;
   const length = Math.hypot(deltaX, deltaY) || 1;

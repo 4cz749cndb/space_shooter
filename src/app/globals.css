@@ -314,6 +314,24 @@ select {
   width: min(500px, calc(100vw - 32px));
 }
 
+.stage-briefing-stack {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.stage-briefing-title {
+  font-size: clamp(1.9rem, 7vw, 3.3rem);
+}
+
+.stage-briefing-copy {
+  margin: 0 0 26px;
+  color: var(--text);
+  font-family: "Courier New", Courier, monospace;
+  font-size: clamp(0.9rem, 2.8vw, 1.03rem);
+  font-weight: 800;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
 .high-scores-menu-stack {
   width: min(500px, calc(100vw - 32px));
 }
@@ -494,6 +512,36 @@ select {
   font-size: clamp(0.95rem, 3vw, 1.1rem);
   font-weight: 900;
   cursor: pointer;
+}
+
+.stage-select-button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: 64px;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.stage-select-button span:first-child {
+  grid-row: span 2;
+  color: rgba(5, 7, 13, 0.72);
+  font-size: 0.82rem;
+}
+
+.stage-select-button span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-select-button span:nth-child(3) {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(5, 7, 13, 0.68);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
 }
 
 .menu-button:hover,

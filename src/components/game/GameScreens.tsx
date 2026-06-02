@@ -9,7 +9,7 @@ import {
   type HighScoreEntry
 } from "@/lib/highScores";
 
-type MenuPhase = "menu" | "exited" | "highScores";
+type MenuPhase = "menu" | "stageSelect" | "exited" | "highScores";
 
 type DisplayHighScoreEntry = HighScoreEntry & {
   isPlayer?: boolean;
@@ -20,32 +20,55 @@ type SubmitHighScore = (input: { name: string; score: number }) => Promise<{
   submittedScore: HighScoreEntry | null;
 }>;
 
+type StageBriefing = {
+  briefing: string;
+  id: number;
+  setting: string;
+  title: string;
+};
+
+type StageSelectItem = {
+  id: number;
+  setting: string;
+  title: string;
+};
+
 export function RetroMenu({
   phase,
+  stages,
   highScores,
   onActivateAudio,
   onNewGame,
   onExit,
   onBackToMenu,
-  onHighScores
+  onHighScores,
+  onSelectStage,
+  onStageSelect
 }: {
   phase: MenuPhase;
+  stages: StageSelectItem[];
   highScores: HighScoreEntry[];
   onActivateAudio: () => Promise<void>;
   onNewGame: () => void;
   onExit: () => void;
   onBackToMenu: () => void;
   onHighScores: () => void;
+  onSelectStage: () => void;
+  onStageSelect: (stageId: number) => void;
 }) {
   const isExited = phase === "exited";
   const isHighScores = phase === "highScores";
+  const isStageSelect = phase === "stageSelect";
 
   return (
-    <RetroScreen ariaLabel={isExited ? "Exited game" : isHighScores ? "High scores" : "Main menu"} onPointerDown={() => void onActivateAudio()}>
-      <div className={isHighScores ? "menu-stack high-scores-menu-stack" : "menu-stack"}>
-        <p className="menu-kicker">{isExited ? "System Offline" : isHighScores ? "Hall Of Fame" : "Insert Credit"}</p>
+    <RetroScreen
+      ariaLabel={isExited ? "Exited game" : isHighScores ? "High scores" : isStageSelect ? "Select stage" : "Main menu"}
+      onPointerDown={() => void onActivateAudio()}
+    >
+      <div className={isHighScores || isStageSelect ? "menu-stack high-scores-menu-stack" : "menu-stack"}>
+        <p className="menu-kicker">{isExited ? "System Offline" : isHighScores ? "Hall Of Fame" : isStageSelect ? "Mission Select" : "Insert Credit"}</p>
         <h1 className="menu-title">Space Shooter</h1>
-        <p className="menu-status">{isExited ? "Game session ended" : isHighScores ? "Top pilots" : "Ready player one"}</p>
+        <p className="menu-status">{isExited ? "Game session ended" : isHighScores ? "Top pilots" : isStageSelect ? "Choose insertion point" : "Ready player one"}</p>
 
         {isExited ? (
           <div className="menu-actions" aria-label="Exited actions">
@@ -62,6 +85,19 @@ export function RetroMenu({
               </button>
             </div>
           </>
+        ) : isStageSelect ? (
+          <div className="menu-actions" aria-label="Stage select actions">
+            {stages.map((stage) => (
+              <button className="menu-button stage-select-button" key={stage.id} type="button" onClick={() => onStageSelect(stage.id)}>
+                <span>Stage {stage.id}</span>
+                <span>{stage.title}</span>
+                <span>{stage.setting}</span>
+              </button>
+            ))}
+            <button className="menu-button" type="button" onClick={onBackToMenu}>
+              Back To Menu
+            </button>
+          </div>
         ) : (
           <div className="menu-actions" aria-label="Main menu actions">
             <button className="menu-button is-primary" type="button" onClick={onNewGame}>
@@ -70,8 +106,8 @@ export function RetroMenu({
             <button className="menu-button" type="button" onClick={onHighScores}>
               High Scores
             </button>
-            <button className="menu-button" type="button" disabled>
-              Select Level
+            <button className="menu-button" type="button" onClick={onSelectStage}>
+              Select Stage
             </button>
             <button className="menu-button" type="button" disabled>
               Options
@@ -81,6 +117,36 @@ export function RetroMenu({
             </button>
           </div>
         )}
+      </div>
+    </RetroScreen>
+  );
+}
+
+export function StageBriefingScreen({
+  stage,
+  stageCount,
+  onActivateAudio,
+  onStartStage
+}: {
+  stage: StageBriefing;
+  stageCount: number;
+  onActivateAudio: () => Promise<void>;
+  onStartStage: () => void;
+}) {
+  return (
+    <RetroScreen ariaLabel={`Stage ${stage.id} briefing`} onPointerDown={() => void onActivateAudio()}>
+      <div className="menu-stack stage-briefing-stack">
+        <p className="menu-kicker">
+          Stage {stage.id}/{stageCount}
+        </p>
+        <h1 className="menu-title stage-briefing-title">{stage.title}</h1>
+        <p className="menu-status">{stage.setting}</p>
+        <p className="stage-briefing-copy">{stage.briefing}</p>
+        <div className="menu-actions" aria-label="Stage briefing actions">
+          <button className="menu-button is-primary" type="button" onClick={onStartStage}>
+            Start Stage
+          </button>
+        </div>
       </div>
     </RetroScreen>
   );

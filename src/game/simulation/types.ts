@@ -11,13 +11,25 @@ export type Vector2 = {
   y: number;
 };
 
+export type GroundProfile = {
+  points: Vector2[];
+};
+
 export type Projectile = Vector2 & {
   id: number;
   velocityX: number;
   velocityY: number;
 };
 
-export type EnemyKind = "basic" | "sineGunner" | "miniBoss" | "boss";
+export type EnemyKind = "basic" | "sineGunner" | "miniBoss" | "boss" | "turret";
+
+export type TurretBeam = {
+  id: number;
+  start: Vector2;
+  target: Vector2;
+  timeRemaining: number;
+  hasHitPlayer: boolean;
+};
 
 export type Enemy = Vector2 & {
   id: number;
@@ -34,6 +46,10 @@ export type Enemy = Vector2 & {
   kind: EnemyKind;
   phase: number;
   targetY: number;
+  turretBeams: TurretBeam[];
+  turretBurstShotsFired: number;
+  turretChargeTimeRemaining: number;
+  turretIdleTimer: number;
 };
 
 export type EnemyBeam =
@@ -104,10 +120,12 @@ export type SimulationEvent =
       position: Vector2;
     }
   | {
-      type: "levelComplete";
+      type: "stageComplete";
       position: Vector2;
       score: number;
     };
+
+export type SimulationInitialProgress = Pick<Snapshot, "elapsedTime" | "health" | "level" | "maxHealth" | "nextLevelScore" | "score" | "shieldCharges">;
 
 export type Snapshot = {
   player: Vector2;
@@ -116,13 +134,13 @@ export type Snapshot = {
   enemyProjectiles: EnemyProjectile[];
   enemyBeams: EnemyBeam[];
   powerUps: PowerUp[];
+  ground: GroundProfile | null;
   elapsedTime: number;
   score: number;
   shieldCharges: number;
   level: number;
   nextLevelScore: number;
   timeScale: number;
-  wave: number;
   weaponPowerTimeRemaining: number;
   health: number;
   maxHealth: number;

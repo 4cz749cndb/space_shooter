@@ -3,14 +3,24 @@
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
-import { GameOverScreen, RetroMenu } from "@/components/game/GameScreens";
+import { Shape } from "three";
+import { GameOverScreen, RetroMenu, StageBriefingScreen } from "@/components/game/GameScreens";
 import { type ExplosionKind, useEightBitMusic } from "@/components/game/useEightBitMusic";
 import { useHighScores } from "@/components/game/useHighScores";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
-import type { ActionState, Enemy, EnemyBeam, PowerUpKind, Snapshot, Vector2 } from "@/game/simulation/types";
+import type { ActionState, Enemy, EnemyBeam, GroundProfile, PowerUpKind, SimulationInitialProgress, Snapshot, Vector2 } from "@/game/simulation/types";
 import { qualifiesForHighScores } from "@/lib/highScores";
 
-type GamePhase = "menu" | "playing" | "gameOver" | "exited" | "highScores";
+type GamePhase = "menu" | "stageSelect" | "stageBriefing" | "playing" | "gameOver" | "exited" | "highScores";
+type StageDefinition = {
+  briefing: string;
+  difficultyMultiplier: number;
+  ground?: GroundProfile;
+  id: number;
+  setting: string;
+  title: string;
+  turretsEnabled?: boolean;
+};
 type Explosion = {
   id: number;
   kind: ExplosionKind;
@@ -35,19 +45,62 @@ const initialSnapshot: Snapshot = {
   enemyProjectiles: [],
   enemyBeams: [],
   powerUps: [],
+  ground: null,
   elapsedTime: 0,
   score: 0,
   shieldCharges: 0,
   level: 1,
   nextLevelScore: 100,
   timeScale: 1,
-  wave: 1,
   weaponPowerTimeRemaining: 0,
   health: 100,
   maxHealth: 100,
   events: []
 };
 const hudSnapshotInterval = 1 / 12;
+const stageDefinitions: StageDefinition[] = [
+  {
+    briefing: "Enemy formations are breaking through the outer patrol lane. Hold the line, survive the assault, and eliminate the command ship.",
+    difficultyMultiplier: 0.8,
+    id: 1,
+    setting: "Outer Orbit",
+    title: "First Contact"
+  },
+  {
+    briefing: "Attack the enemy base from low orbit. Skim the outpost defenses, but stay clear of the jagged ground batteries along the lower edge.",
+    difficultyMultiplier: 1,
+    ground: {
+      points: [
+        { x: -5.12, y: -2.84 },
+        { x: -4.36, y: -2.18 },
+        { x: -3.8, y: -2.78 },
+        { x: -3.1, y: -2.5 },
+        { x: -2.35, y: -2.66 },
+        { x: -1.58, y: -2.08 },
+        { x: -0.74, y: -2.56 },
+        { x: 0.06, y: -1.96 },
+        { x: 0.82, y: -2.48 },
+        { x: 1.55, y: -1.92 },
+        { x: 2.32, y: -2.44 },
+        { x: 3.08, y: -2.24 },
+        { x: 3.8, y: -2.58 },
+        { x: 4.56, y: -2.04 },
+        { x: 5.32, y: -2.82 }
+      ]
+    },
+    id: 2,
+    setting: "Enemy Outpost",
+    title: "Base Attack",
+    turretsEnabled: true
+  },
+  {
+    briefing: "The final placeholder stage uses the current battle pattern one more time while the next enemy roster is prepared.",
+    difficultyMultiplier: 1.3,
+    id: 3,
+    setting: "Deep Sector",
+    title: "Last Vector"
+  }
+];
 
 export function GameClient() {
   const [phase, setPhase] = useState<GamePhase>("menu");
@@ -55,6 +108,7 @@ export function GameClient() {
   const [isVictory, setIsVictory] = useState(false);
   const [levelUpMessage, setLevelUpMessage] = useState<LevelUpMessage | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
+  const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const levelUpMessageIdRef = useRef(1);
   const levelUpMessageTimerRef = useRef<number | null>(null);
   const { highScores, refreshHighScores, submitHighScore } = useHighScores();
@@ -95,10 +149,19 @@ export function GameClient() {
     music.stop();
     music.setBossMode(false);
     music.setIntensity(1);
-    void music.start();
     clearLevelUpMessage();
     setIsVictory(false);
+    setCurrentStageIndex(0);
     setSnapshot(initialSnapshot);
+    setPhase("stageBriefing");
+  };
+
+  const handleStartStage = () => {
+    music.stop();
+    music.setBossMode(false);
+    music.setIntensity(1);
+    void music.start();
+    clearLevelUpMessage();
     setGameKey((key) => key + 1);
     setPhase("playing");
   };
@@ -109,8 +172,27 @@ export function GameClient() {
     music.setIntensity(1);
     clearLevelUpMessage();
     setIsVictory(false);
+    setCurrentStageIndex(0);
     setSnapshot(initialSnapshot);
     setPhase("exited");
+  };
+
+  const handleStageComplete = (finalSnapshot: Snapshot) => {
+    const nextStageIndex = currentStageIndex + 1;
+
+    music.stop();
+    music.setBossMode(false);
+    music.setIntensity(1);
+    clearLevelUpMessage();
+    setSnapshot(finalSnapshot);
+
+    if (nextStageIndex >= stageDefinitions.length) {
+      handleGameOver(finalSnapshot, true);
+      return;
+    }
+
+    setCurrentStageIndex(nextStageIndex);
+    setPhase("stageBriefing");
   };
 
   const handleGameOver = (finalSnapshot: Snapshot, victory = false) => {
@@ -132,6 +214,7 @@ export function GameClient() {
     music.setIntensity(1);
     clearLevelUpMessage();
     setIsVictory(false);
+    setCurrentStageIndex(0);
     setSnapshot(initialSnapshot);
     setPhase("menu");
   };
@@ -139,6 +222,25 @@ export function GameClient() {
   const handleHighScores = () => {
     void refreshHighScores();
     setPhase("highScores");
+  };
+
+  const handleSelectStage = () => {
+    setPhase("stageSelect");
+  };
+
+  const handleStageSelect = (stageId: number) => {
+    const nextStageIndex = stageDefinitions.findIndex((stage) => stage.id === stageId);
+
+    if (nextStageIndex < 0) return;
+
+    music.stop();
+    music.setBossMode(false);
+    music.setIntensity(1);
+    clearLevelUpMessage();
+    setIsVictory(false);
+    setCurrentStageIndex(nextStageIndex);
+    setSnapshot(initialSnapshot);
+    setPhase("stageBriefing");
   };
 
   return (
@@ -153,9 +255,14 @@ export function GameClient() {
               <SpaceScene
                 key={gameKey}
                 actions={actions.current}
+                difficultyMultiplier={stageDefinitions[currentStageIndex].difficultyMultiplier}
+                ground={stageDefinitions[currentStageIndex].ground}
+                initialProgress={getSimulationInitialProgress(snapshot)}
+                turretsEnabled={stageDefinitions[currentStageIndex].turretsEnabled}
                 onGameOver={handleGameOver}
                 onLevelUp={handleLevelUp}
                 onSnapshot={setSnapshot}
+                onStageComplete={handleStageComplete}
                 onTimeScaleChange={music.setIntensity}
                 onStopMusic={music.stop}
                 playBuzz={music.playBuzz}
@@ -167,9 +274,16 @@ export function GameClient() {
               />
             </Canvas>
           </div>
-          <Hud snapshot={snapshot} onExit={handleExit} />
+          <Hud currentStage={stageDefinitions[currentStageIndex]} snapshot={snapshot} stageCount={stageDefinitions.length} onExit={handleExit} />
           {levelUpMessage ? <LevelUpBanner key={levelUpMessage.id} level={levelUpMessage.level} /> : null}
         </>
+      ) : phase === "stageBriefing" ? (
+        <StageBriefingScreen
+          stage={stageDefinitions[currentStageIndex]}
+          stageCount={stageDefinitions.length}
+          onActivateAudio={music.start}
+          onStartStage={handleStartStage}
+        />
       ) : phase === "gameOver" ? (
         <GameOverScreen
           highScores={highScores}
@@ -182,12 +296,15 @@ export function GameClient() {
       ) : (
         <RetroMenu
           phase={phase}
+          stages={stageDefinitions}
           highScores={highScores}
           onActivateAudio={music.start}
           onNewGame={handleNewGame}
           onExit={handleExit}
           onBackToMenu={handleBackToMenu}
           onHighScores={handleHighScores}
+          onSelectStage={handleSelectStage}
+          onStageSelect={handleStageSelect}
         />
       )}
     </main>
@@ -196,9 +313,14 @@ export function GameClient() {
 
 function SpaceScene({
   actions,
+  difficultyMultiplier,
+  ground,
+  initialProgress,
+  turretsEnabled = false,
   onGameOver,
   onLevelUp,
   onSnapshot,
+  onStageComplete,
   onTimeScaleChange,
   onStopMusic,
   playBossSpawn,
@@ -209,9 +331,14 @@ function SpaceScene({
   setBossMusicMode
 }: {
   actions: ActionState;
+  difficultyMultiplier: number;
+  ground?: GroundProfile;
+  initialProgress: Partial<SimulationInitialProgress>;
+  turretsEnabled?: boolean;
   onGameOver: (snapshot: Snapshot, victory?: boolean) => void;
   onLevelUp: (level: number) => void;
   onSnapshot: (snapshot: Snapshot) => void;
+  onStageComplete: (snapshot: Snapshot) => void;
   onTimeScaleChange: (timeScale: number) => void;
   onStopMusic: () => void;
   playBossSpawn: () => void;
@@ -221,7 +348,7 @@ function SpaceScene({
   playPew: () => void;
   setBossMusicMode: (isBossMode: boolean) => void;
 }) {
-  const simulation = useMemo(() => createSpaceShooterSimulation(), []);
+  const [simulation] = useState(() => createSpaceShooterSimulation(initialProgress, { difficultyMultiplier, ground, turretsEnabled }));
   const playerRef = useRef<Mesh>(null);
   const playerMaterialRef = useRef<MeshBasicMaterial>(null);
   const gameOverRef = useRef(false);
@@ -340,7 +467,7 @@ function SpaceScene({
         gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot), 700);
       }
 
-      if (event.type === "levelComplete" && !gameOverRef.current) {
+      if (event.type === "stageComplete" && !gameOverRef.current) {
         gameOverRef.current = true;
         lastHudSnapshotRef.current = snapshot;
         lastHudUpdateTimeRef.current = elapsedTime;
@@ -353,7 +480,7 @@ function SpaceScene({
           x: event.position.x,
           y: event.position.y
         });
-        gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot, true), 900);
+        gameOverTimerRef.current = window.setTimeout(() => onStageComplete(snapshot), 900);
       }
     }
 
@@ -369,6 +496,7 @@ function SpaceScene({
   return (
     <>
       <Starfield />
+      {sceneSnapshot.ground ? <GroundTerrain ground={sceneSnapshot.ground} /> : null}
       <mesh ref={playerRef} position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
         <coneGeometry args={[0.29, 0.74, 3]} />
         <meshBasicMaterial ref={playerMaterialRef} color="#66e3ff" />
@@ -394,6 +522,8 @@ function SpaceScene({
           <BossEnemy key={enemy.id} enemy={enemy} />
         ) : enemy.kind === "miniBoss" ? (
           <MiniBossEnemy key={enemy.id} enemy={enemy} />
+        ) : enemy.kind === "turret" ? (
+          <TurretEnemy key={enemy.id} enemy={enemy} />
         ) : (
           <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
             {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
@@ -436,11 +566,55 @@ function SpaceScene({
 function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
   return (
     next.score !== previous.score ||
-    next.wave !== previous.wave ||
     next.level !== previous.level ||
     next.nextLevelScore !== previous.nextLevelScore ||
     next.health !== previous.health ||
     next.maxHealth !== previous.maxHealth
+  );
+}
+
+function TurretEnemy({ enemy }: { enemy: Enemy }) {
+  const groupRef = useRef<Group>(null);
+  const chargeGlowRef = useRef<MeshBasicMaterial>(null);
+  const elapsedTimeRef = useRef(0);
+  const hasActiveBeam = enemy.turretBeams.length > 0;
+  const isCharging = enemy.turretChargeTimeRemaining > 0;
+
+  useFrame((_, delta) => {
+    elapsedTimeRef.current += delta;
+
+    if (groupRef.current) {
+      groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 3.2) * 0.015;
+    }
+
+    if (chargeGlowRef.current) {
+      chargeGlowRef.current.opacity = isCharging ? 0.34 + Math.sin(elapsedTimeRef.current * 30) * 0.16 : 0.08;
+    }
+  });
+
+  return (
+    <group ref={groupRef} position={[enemy.x, enemy.y, 0.04]}>
+      <mesh position={[0, -0.16, 0]}>
+        <boxGeometry args={[0.62, 0.22, 0.12]} />
+        <meshBasicMaterial color="#2c3949" />
+      </mesh>
+      <mesh position={[0, 0.03, 0.02]}>
+        <boxGeometry args={[0.36, 0.3, 0.14]} />
+        <meshBasicMaterial color="#ffbf69" />
+      </mesh>
+      <mesh position={[-0.2, 0.2, 0.05]} rotation={[0, 0, Math.PI / 10]}>
+        <boxGeometry args={[0.4, 0.12, 0.12]} />
+        <meshBasicMaterial color={isCharging ? "#ffe66d" : hasActiveBeam ? "#ff2f7d" : "#eef7ff"} />
+      </mesh>
+      <mesh position={[-0.43, 0.25, 0.06]}>
+        <circleGeometry args={[0.13, 16]} />
+        <meshBasicMaterial color={isCharging ? "#ffe66d" : hasActiveBeam ? "#ff2f7d" : "#66e3ff"} transparent opacity={0.9} />
+      </mesh>
+      <mesh position={[-0.43, 0.25, -0.02]}>
+        <circleGeometry args={[0.32, 20]} />
+        <meshBasicMaterial ref={chargeGlowRef} color="#ff2f7d" transparent opacity={0.08} />
+      </mesh>
+    </group>
   );
 }
 
@@ -831,6 +1005,65 @@ function ExplosionEffect({
   );
 }
 
+function GroundTerrain({ ground }: { ground: GroundProfile }) {
+  const terrainFillBottom = -4.6;
+  const terrainShape = useMemo(() => {
+    const shape = new Shape();
+    const firstPoint = ground.points[0];
+    const lastPoint = ground.points[ground.points.length - 1];
+
+    shape.moveTo(firstPoint.x, terrainFillBottom);
+
+    for (const point of ground.points) {
+      shape.lineTo(point.x, point.y);
+    }
+
+    shape.lineTo(lastPoint.x, terrainFillBottom);
+    shape.closePath();
+
+    return shape;
+  }, [ground, terrainFillBottom]);
+
+  const edgeSegments = useMemo(
+    () =>
+      ground.points.slice(1).map((point, index) => {
+        const previous = ground.points[index];
+        const deltaX = point.x - previous.x;
+        const deltaY = point.y - previous.y;
+
+        return {
+          angle: Math.atan2(deltaY, deltaX),
+          id: index,
+          length: Math.hypot(deltaX, deltaY),
+          x: (previous.x + point.x) / 2,
+          y: (previous.y + point.y) / 2
+        };
+      }),
+    [ground]
+  );
+
+  return (
+    <group position={[0, 0, -0.18]}>
+      <mesh>
+        <shapeGeometry args={[terrainShape]} />
+        <meshBasicMaterial color="#18202a" transparent opacity={0.96} />
+      </mesh>
+      {edgeSegments.map((segment) => (
+        <mesh key={segment.id} position={[segment.x, segment.y, 0.02]} rotation={[0, 0, segment.angle]}>
+          <boxGeometry args={[segment.length, 0.045, 0.02]} />
+          <meshBasicMaterial color="#ffbf69" transparent opacity={0.78} />
+        </mesh>
+      ))}
+      {ground.points.map((point, index) => (
+        <mesh key={index} position={[point.x, point.y - 0.14, 0.03]}>
+          <boxGeometry args={[0.16, 0.28, 0.02]} />
+          <meshBasicMaterial color="#2c3949" transparent opacity={0.9} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function Starfield() {
   const stars = useMemo(
     () =>
@@ -856,19 +1089,32 @@ function Starfield() {
   );
 }
 
-function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
+function Hud({
+  currentStage,
+  snapshot,
+  stageCount,
+  onExit
+}: {
+  currentStage: StageDefinition;
+  snapshot: Snapshot;
+  stageCount: number;
+  onExit: () => void;
+}) {
   const healthPercent = `${(snapshot.health / snapshot.maxHealth) * 100}%`;
 
   return (
     <section className="hud" aria-label="Game status">
       <div className="hud-top">
         <div className="hud-panel">
-          <p className="hud-label">Score</p>
-          <p className="hud-value">{snapshot.score}</p>
+          <p className="hud-label">Stage</p>
+          <p className="hud-value">
+            {currentStage.id}/{stageCount}
+          </p>
+          <p className="hud-subvalue">{currentStage.setting}</p>
         </div>
         <div className="hud-panel">
-          <p className="hud-label">Wave</p>
-          <p className="hud-value">{snapshot.wave}</p>
+          <p className="hud-label">Score</p>
+          <p className="hud-value">{snapshot.score}</p>
         </div>
         <div className="hud-panel hud-level">
           <p className="hud-label">Level</p>
@@ -900,6 +1146,18 @@ function Hud({ snapshot, onExit }: { snapshot: Snapshot; onExit: () => void }) {
       <div className="hud-bottom">Dodge incoming objects from the right. Move with WASD or arrows. Fire with Space.</div>
     </section>
   );
+}
+
+function getSimulationInitialProgress(snapshot: Snapshot): Partial<SimulationInitialProgress> {
+  return {
+    elapsedTime: snapshot.elapsedTime,
+    health: snapshot.health,
+    level: snapshot.level,
+    maxHealth: snapshot.maxHealth,
+    nextLevelScore: snapshot.nextLevelScore,
+    score: snapshot.score,
+    shieldCharges: snapshot.shieldCharges
+  };
 }
 
 function LevelUpBanner({ level }: { level: number }) {
