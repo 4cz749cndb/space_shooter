@@ -9,6 +9,7 @@ import type {
   SimulationEvent,
   SimulationInitialProgress,
   Snapshot,
+  TurretBeam,
   Vector2
 } from "./types";
 
@@ -148,12 +149,16 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
         }
 
         if (enemy.kind === "turret") {
-          return enemy.turretBeams.map((beam) => ({
-            end: getBeamEnd(beam.start, beam.target),
-            id: beam.id,
-            kind: "aimed" as const,
-            start: { ...beam.start }
-          }));
+          return enemy.turretBeams.map((beam) => {
+            const segment = getTurretBeamSegment(enemy, beam);
+
+            return {
+              end: getBeamEnd(segment.start, segment.target),
+              id: beam.id,
+              kind: "aimed" as const,
+              start: segment.start
+            };
+          });
         }
 
         if (enemy.kind === "boss" && enemy.beamStart && enemy.beamTarget) {
@@ -643,11 +648,12 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
 
     for (let beamIndex = enemy.turretBeams.length - 1; beamIndex >= 0; beamIndex -= 1) {
       const beam = enemy.turretBeams[beamIndex];
+      const segment = getTurretBeamSegment(enemy, beam);
       beam.timeRemaining = Math.max(0, beam.timeRemaining - delta);
 
       if (
         !beam.hasHitPlayer &&
-        isPointNearLineSegment(player, beam.start, getBeamEnd(beam.start, beam.target), turretBeamHalfWidth)
+        isPointNearLineSegment(player, segment.start, getBeamEnd(segment.start, segment.target), turretBeamHalfWidth)
       ) {
         beam.hasHitPlayer = true;
         damagePlayer(events, enemyBeamDamage);
@@ -787,7 +793,23 @@ function getTurretY(x: number, groundPoints: Vector2[] | undefined) {
 }
 
 function getTurretBeamStart(enemy: Enemy): Vector2 {
-  return { x: enemy.x - 0.08, y: enemy.y + 0.24 };
+  return { x: enemy.x - 0.43, y: enemy.y + 0.25 };
+}
+
+function getTurretBeamSegment(enemy: Enemy, beam: TurretBeam) {
+  const start = getTurretBeamStart(enemy);
+  const offset = {
+    x: start.x - beam.start.x,
+    y: start.y - beam.start.y
+  };
+
+  return {
+    start,
+    target: {
+      x: beam.target.x + offset.x,
+      y: beam.target.y + offset.y
+    }
+  };
 }
 
 function getBossBeamStart(enemy: Enemy): Vector2 {
