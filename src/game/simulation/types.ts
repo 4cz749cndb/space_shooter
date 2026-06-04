@@ -12,6 +12,9 @@ export type Vector2 = {
 };
 
 export type GroundProfile = {
+  maxY?: number;
+  minY?: number;
+  maxStep?: number;
   points: Vector2[];
 };
 
@@ -22,6 +25,8 @@ export type Projectile = Vector2 & {
 };
 
 export type EnemyKind = "basic" | "sineGunner" | "miniBoss" | "boss" | "turret";
+
+export type TurretMount = "floor" | "ceiling";
 
 export type TurretBeam = {
   id: number;
@@ -48,8 +53,10 @@ export type Enemy = Vector2 & {
   targetY: number;
   turretBeams: TurretBeam[];
   turretBurstShotsFired: number;
+  turretChargeTarget: Vector2 | null;
   turretChargeTimeRemaining: number;
   turretIdleTimer: number;
+  turretMount: TurretMount | null;
 };
 
 export type EnemyBeam =
@@ -134,6 +141,7 @@ export type Snapshot = {
   enemyProjectiles: EnemyProjectile[];
   enemyBeams: EnemyBeam[];
   powerUps: PowerUp[];
+  ceiling: GroundProfile | null;
   ground: GroundProfile | null;
   elapsedTime: number;
   score: number;

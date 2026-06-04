@@ -13,7 +13,9 @@ import { qualifiesForHighScores } from "@/lib/highScores";
 
 type GamePhase = "menu" | "stageSelect" | "stageBriefing" | "playing" | "gameOver" | "exited" | "highScores";
 type StageDefinition = {
+  backgroundKind?: "stars" | "rock";
   briefing: string;
+  ceiling?: GroundProfile;
   difficultyMultiplier: number;
   ground?: GroundProfile;
   id: number;
@@ -45,6 +47,7 @@ const initialSnapshot: Snapshot = {
   enemyProjectiles: [],
   enemyBeams: [],
   powerUps: [],
+  ceiling: null,
   ground: null,
   elapsedTime: 0,
   score: 0,
@@ -94,11 +97,57 @@ const stageDefinitions: StageDefinition[] = [
     turretsEnabled: true
   },
   {
-    briefing: "The final placeholder stage uses the current battle pattern one more time while the next enemy roster is prepared.",
+    backgroundKind: "rock",
+    briefing: "Fly deep into the enemy base, thread the reactor tunnels, and destroy the core before the complex seals itself around you.",
+    ceiling: {
+      maxStep: 0.84,
+      maxY: 2.9,
+      minY: 1.45,
+      points: [
+        { x: -5.12, y: 2.72 },
+        { x: -4.36, y: 1.72 },
+        { x: -3.8, y: 2.58 },
+        { x: -3.1, y: 1.55 },
+        { x: -2.35, y: 2.82 },
+        { x: -1.58, y: 1.66 },
+        { x: -0.74, y: 2.28 },
+        { x: 0.06, y: 1.48 },
+        { x: 0.82, y: 2.72 },
+        { x: 1.55, y: 1.78 },
+        { x: 2.32, y: 2.9 },
+        { x: 3.08, y: 1.58 },
+        { x: 3.8, y: 2.46 },
+        { x: 4.56, y: 1.94 },
+        { x: 5.32, y: 2.84 }
+      ]
+    },
     difficultyMultiplier: 1.3,
+    ground: {
+      maxStep: 0.84,
+      maxY: -1.45,
+      minY: -2.9,
+      points: [
+        { x: -5.12, y: -2.86 },
+        { x: -4.36, y: -1.74 },
+        { x: -3.8, y: -2.7 },
+        { x: -3.1, y: -1.58 },
+        { x: -2.35, y: -2.88 },
+        { x: -1.58, y: -1.72 },
+        { x: -0.74, y: -2.22 },
+        { x: 0.06, y: -1.46 },
+        { x: 0.82, y: -2.78 },
+        { x: 1.55, y: -1.82 },
+        { x: 2.32, y: -2.86 },
+        { x: 3.08, y: -1.54 },
+        { x: 3.8, y: -2.52 },
+        { x: 4.56, y: -2.02 },
+        { x: 5.32, y: -2.9 }
+      ]
+    },
     id: 3,
-    setting: "Deep Sector",
-    title: "Last Vector"
+    setting: "Enemy Core",
+    title: "Going deep",
+    turretsEnabled: true
   }
 ];
 
@@ -255,6 +304,8 @@ export function GameClient() {
               <SpaceScene
                 key={gameKey}
                 actions={actions.current}
+                backgroundKind={stageDefinitions[currentStageIndex].backgroundKind ?? "stars"}
+                ceiling={stageDefinitions[currentStageIndex].ceiling}
                 difficultyMultiplier={stageDefinitions[currentStageIndex].difficultyMultiplier}
                 ground={stageDefinitions[currentStageIndex].ground}
                 initialProgress={getSimulationInitialProgress(snapshot)}
@@ -313,6 +364,8 @@ export function GameClient() {
 
 function SpaceScene({
   actions,
+  backgroundKind,
+  ceiling,
   difficultyMultiplier,
   ground,
   initialProgress,
@@ -331,6 +384,8 @@ function SpaceScene({
   setBossMusicMode
 }: {
   actions: ActionState;
+  backgroundKind: "stars" | "rock";
+  ceiling?: GroundProfile;
   difficultyMultiplier: number;
   ground?: GroundProfile;
   initialProgress: Partial<SimulationInitialProgress>;
@@ -348,7 +403,7 @@ function SpaceScene({
   playPew: () => void;
   setBossMusicMode: (isBossMode: boolean) => void;
 }) {
-  const [simulation] = useState(() => createSpaceShooterSimulation(initialProgress, { difficultyMultiplier, ground, turretsEnabled }));
+  const [simulation] = useState(() => createSpaceShooterSimulation(initialProgress, { ceiling, difficultyMultiplier, ground, turretsEnabled }));
   const playerRef = useRef<Mesh>(null);
   const playerMaterialRef = useRef<MeshBasicMaterial>(null);
   const gameOverRef = useRef(false);
@@ -495,7 +550,8 @@ function SpaceScene({
 
   return (
     <>
-      <Starfield />
+      {backgroundKind === "rock" ? <RockBackground /> : <Starfield />}
+      {sceneSnapshot.ceiling ? <Terrain terrain={sceneSnapshot.ceiling} side="ceiling" /> : null}
       {sceneSnapshot.ground ? <GroundTerrain ground={sceneSnapshot.ground} /> : null}
       <mesh ref={playerRef} position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
         <coneGeometry args={[0.29, 0.74, 3]} />
@@ -579,6 +635,7 @@ function TurretEnemy({ enemy }: { enemy: Enemy }) {
   const elapsedTimeRef = useRef(0);
   const hasActiveBeam = enemy.turretBeams.length > 0;
   const isCharging = enemy.turretChargeTimeRemaining > 0;
+  const verticalScale = enemy.turretMount === "ceiling" ? -1 : 1;
 
   useFrame((_, delta) => {
     elapsedTimeRef.current += delta;
@@ -593,7 +650,7 @@ function TurretEnemy({ enemy }: { enemy: Enemy }) {
   });
 
   return (
-    <group ref={groupRef} position={[enemy.x, enemy.y, 0.04]}>
+    <group ref={groupRef} position={[enemy.x, enemy.y, 0.04]} scale={[1, verticalScale, 1]}>
       <mesh position={[0, -0.16, 0]}>
         <boxGeometry args={[0.62, 0.22, 0.12]} />
         <meshBasicMaterial color="#2c3949" />
@@ -1006,28 +1063,33 @@ function ExplosionEffect({
 }
 
 function GroundTerrain({ ground }: { ground: GroundProfile }) {
-  const terrainFillBottom = -4.6;
+  return <Terrain side="floor" terrain={ground} />;
+}
+
+function Terrain({ side, terrain }: { side: "floor" | "ceiling"; terrain: GroundProfile }) {
+  const terrainFillY = side === "floor" ? -4.6 : 4.6;
+  const isCeiling = side === "ceiling";
   const terrainShape = useMemo(() => {
     const shape = new Shape();
-    const firstPoint = ground.points[0];
-    const lastPoint = ground.points[ground.points.length - 1];
+    const firstPoint = terrain.points[0];
+    const lastPoint = terrain.points[terrain.points.length - 1];
 
-    shape.moveTo(firstPoint.x, terrainFillBottom);
+    shape.moveTo(firstPoint.x, terrainFillY);
 
-    for (const point of ground.points) {
+    for (const point of terrain.points) {
       shape.lineTo(point.x, point.y);
     }
 
-    shape.lineTo(lastPoint.x, terrainFillBottom);
+    shape.lineTo(lastPoint.x, terrainFillY);
     shape.closePath();
 
     return shape;
-  }, [ground, terrainFillBottom]);
+  }, [terrain, terrainFillY]);
 
   const edgeSegments = useMemo(
     () =>
-      ground.points.slice(1).map((point, index) => {
-        const previous = ground.points[index];
+      terrain.points.slice(1).map((point, index) => {
+        const previous = terrain.points[index];
         const deltaX = point.x - previous.x;
         const deltaY = point.y - previous.y;
 
@@ -1039,7 +1101,7 @@ function GroundTerrain({ ground }: { ground: GroundProfile }) {
           y: (previous.y + point.y) / 2
         };
       }),
-    [ground]
+    [terrain]
   );
 
   return (
@@ -1054,8 +1116,8 @@ function GroundTerrain({ ground }: { ground: GroundProfile }) {
           <meshBasicMaterial color="#ffbf69" transparent opacity={0.78} />
         </mesh>
       ))}
-      {ground.points.map((point, index) => (
-        <mesh key={index} position={[point.x, point.y - 0.14, 0.03]}>
+      {terrain.points.map((point, index) => (
+        <mesh key={index} position={[point.x, point.y + (isCeiling ? 0.14 : -0.14), 0.03]}>
           <boxGeometry args={[0.16, 0.28, 0.02]} />
           <meshBasicMaterial color="#2c3949" transparent opacity={0.9} />
         </mesh>
@@ -1083,6 +1145,56 @@ function Starfield() {
         <mesh key={star.id} position={[star.x, star.y, 0]}>
           <circleGeometry args={[star.size, 8]} />
           <meshBasicMaterial color={star.color} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function RockBackground() {
+  const plates = useMemo(
+    () =>
+      Array.from({ length: 42 }, (_, index) => ({
+        color: seededUnit(index * 19 + 9) > 0.58 ? "#202833" : seededUnit(index * 23 + 11) > 0.42 ? "#151b23" : "#29313c",
+        height: seededRange(index * 7 + 2, 0.48, 1.15),
+        id: index,
+        rotation: seededRange(index * 13 + 4, -0.42, 0.42),
+        width: seededRange(index * 5 + 3, 0.72, 1.8),
+        x: seededRange(index * 3 + 1, -6.8, 6.8),
+        y: seededRange(index * 11 + 5, -4, 4)
+      })),
+    []
+  );
+  const cracks = useMemo(
+    () =>
+      Array.from({ length: 64 }, (_, index) => ({
+        height: seededRange(index * 17 + 6, 0.018, 0.044),
+        id: index,
+        opacity: seededRange(index * 29 + 10, 0.18, 0.46),
+        rotation: seededRange(index * 31 + 8, -0.82, 0.82),
+        width: seededRange(index * 37 + 12, 0.22, 1.12),
+        x: seededRange(index * 41 + 14, -6.9, 6.9),
+        y: seededRange(index * 43 + 16, -4.1, 4.1)
+      })),
+    []
+  );
+
+  return (
+    <group position={[0, 0, -1.25]}>
+      <mesh>
+        <planeGeometry args={[14.4, 8.2]} />
+        <meshBasicMaterial color="#0b0e12" />
+      </mesh>
+      {plates.map((plate) => (
+        <mesh key={plate.id} position={[plate.x, plate.y, 0.01]} rotation={[0, 0, plate.rotation]}>
+          <boxGeometry args={[plate.width, plate.height, 0.01]} />
+          <meshBasicMaterial color={plate.color} transparent opacity={0.72} />
+        </mesh>
+      ))}
+      {cracks.map((crack) => (
+        <mesh key={crack.id} position={[crack.x, crack.y, 0.02]} rotation={[0, 0, crack.rotation]}>
+          <boxGeometry args={[crack.width, crack.height, 0.01]} />
+          <meshBasicMaterial color="#05070d" transparent opacity={crack.opacity} />
         </mesh>
       ))}
     </group>
