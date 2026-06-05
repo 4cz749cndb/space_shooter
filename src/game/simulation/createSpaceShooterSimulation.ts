@@ -6,10 +6,10 @@ import type {
   GroundProfile,
   PowerUp,
   Projectile,
+  SimulationFrame,
   SimulationEvent,
   SimulationInitialProgress,
   Snapshot,
-  TurretBeam,
   TurretMount,
   Vector2
 } from "./types";
@@ -36,6 +36,8 @@ const groundHitCooldown = 0.75;
 const groundScrollSpeedMultiplier = 0.5;
 const groundPointSpacing = 0.76;
 const groundOffscreenBuffer = 2.8;
+const terrainLeftEdge = bounds.left - groundOffscreenBuffer - groundPointSpacing;
+const terrainRightEdge = bounds.right + groundOffscreenBuffer + groundPointSpacing;
 const groundHeightMin = -2.9;
 const groundHeightMax = -1.92;
 const groundHeightMaxStep = 0.58;
@@ -110,6 +112,10 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
   const difficultyMultiplier = options.difficultyMultiplier ?? 1;
   const groundProfile = cloneGroundProfile(options.ground);
   const ceilingProfile = cloneGroundProfile(options.ceiling);
+
+  normalizeInitialTerrainProfile(groundProfile);
+  normalizeInitialTerrainProfile(ceilingProfile);
+
   const groundPoints = groundProfile?.points;
   const ceilingPoints = ceilingProfile?.points;
   const turretsEnabled = Boolean(options.turretsEnabled && (groundPoints || ceilingPoints));
@@ -134,6 +140,44 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
   const enemies: Enemy[] = [];
   const enemyProjectiles: EnemyProjectile[] = [];
   const powerUps: PowerUp[] = [];
+  const enemyBeams: EnemyBeam[] = [];
+  const enemyBeamCache = new Map<number, EnemyBeam>();
+  const frame: SimulationFrame = {
+    player,
+    projectiles,
+    enemies,
+    enemyProjectiles,
+    enemyBeams,
+    powerUps,
+    ceiling: ceilingProfile ?? null,
+    ground: groundProfile ?? null,
+    elapsedTime,
+    score,
+    shieldCharges,
+    level,
+    nextLevelScore,
+    timeScale: 1,
+    weaponPowerTimeRemaining,
+    health,
+    maxHealth,
+    events: []
+  };
+
+  const updateFrame = (events: SimulationEvent[] = []): SimulationFrame => {
+    updateEnemyBeams(enemyBeams);
+    frame.elapsedTime = elapsedTime;
+    frame.score = score;
+    frame.shieldCharges = shieldCharges;
+    frame.level = level;
+    frame.nextLevelScore = nextLevelScore;
+    frame.timeScale = getGameSpeedScale();
+    frame.weaponPowerTimeRemaining = weaponPowerTimeRemaining;
+    frame.health = health;
+    frame.maxHealth = maxHealth;
+    frame.events = events;
+
+    return frame;
+  };
 
   const getSnapshot = (events: SimulationEvent[] = []): Snapshot => ({
     player: { ...player },
@@ -148,39 +192,7 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
       }))
     })),
     enemyProjectiles: enemyProjectiles.map((projectile) => ({ ...projectile })),
-    enemyBeams: enemies
-      .filter((enemy) => enemy.beamTimeRemaining > 0 || enemy.turretBeams.length > 0)
-      .flatMap((enemy): EnemyBeam[] => {
-        if (enemy.kind === "miniBoss") {
-          return [{ id: enemy.id, kind: "horizontal" as const, y: enemy.y }];
-        }
-
-        if (enemy.kind === "turret") {
-          return enemy.turretBeams.map((beam) => {
-            const segment = getTurretBeamSegment(enemy, beam);
-
-            return {
-              end: getBeamEnd(segment.start, segment.target),
-              id: beam.id,
-              kind: "aimed" as const,
-              start: segment.start
-            };
-          });
-        }
-
-        if (enemy.kind === "boss" && enemy.beamStart && enemy.beamTarget) {
-          return [
-            {
-              end: getBeamEnd(enemy.beamStart, enemy.beamTarget),
-              id: enemy.id,
-              kind: "aimed" as const,
-              start: { ...enemy.beamStart }
-            }
-          ];
-        }
-
-        return [];
-    }),
+    enemyBeams: getEnemyBeamSnapshots(),
     powerUps: powerUps.map((powerUp) => ({ ...powerUp })),
     ceiling: ceilingProfile ? (cloneGroundProfile(ceilingProfile) ?? null) : null,
     ground: groundProfile ? (cloneGroundProfile(groundProfile) ?? null) : null,
@@ -402,9 +414,9 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
     return mounts[Math.floor(Math.random() * mounts.length)] ?? null;
   };
 
-  const step = (delta: number, actions: ActionState): Snapshot => {
+  const step = (delta: number, actions: ActionState): SimulationFrame => {
     if (health <= 0 || stageComplete) {
-      return getSnapshot();
+      return updateFrame();
     }
 
     const events: SimulationEvent[] = [];
@@ -532,14 +544,14 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
     resolveCollisions(events);
     pruneOffscreen();
 
-    return getSnapshot(events);
+    return updateFrame(events);
   };
 
   const resolvePowerUpCollisions = (events: SimulationEvent[]) => {
     for (let powerUpIndex = powerUps.length - 1; powerUpIndex >= 0; powerUpIndex -= 1) {
       const powerUp = powerUps[powerUpIndex];
 
-      if (distance(powerUp, player) < playerPowerUpHitRadius) {
+      if (distanceSquared(powerUp, player) < playerPowerUpHitRadius * playerPowerUpHitRadius) {
         powerUps.splice(powerUpIndex, 1);
 
         if (powerUp.kind === "shield") {
@@ -596,7 +608,7 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
     for (let projectileIndex = enemyProjectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
       const projectile = enemyProjectiles[projectileIndex];
 
-      if (distance(projectile, player) < playerEnemyProjectileHitRadius) {
+      if (distanceSquared(projectile, player) < playerEnemyProjectileHitRadius * playerEnemyProjectileHitRadius) {
         enemyProjectiles.splice(projectileIndex, 1);
         damagePlayer(events, enemyProjectileDamage);
       }
@@ -605,12 +617,17 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
     for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex -= 1) {
       const enemy = enemies[enemyIndex];
 
-      if (enemy.kind === "boss" && distance(enemy, player) < bossBodyHitRadius) {
+      if (enemy.kind === "boss" && distanceSquared(enemy, player) < bossBodyHitRadius * bossBodyHitRadius) {
         damagePlayer(events, enemyCollisionDamage);
         continue;
       }
 
-      if (enemy.kind !== "miniBoss" && enemy.kind !== "boss" && enemy.kind !== "turret" && distance(enemy, player) < playerEnemyHitRadius) {
+      if (
+        enemy.kind !== "miniBoss" &&
+        enemy.kind !== "boss" &&
+        enemy.kind !== "turret" &&
+        distanceSquared(enemy, player) < playerEnemyHitRadius * playerEnemyHitRadius
+      ) {
         enemies.splice(enemyIndex, 1);
         damagePlayer(events, enemyCollisionDamage);
         continue;
@@ -622,7 +639,7 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
         const hitRadius =
           enemy.kind === "boss" ? bossProjectileHitRadius : enemy.kind === "miniBoss" ? miniBossProjectileHitRadius : enemyProjectileHitRadius;
 
-        if (distance(enemy, projectile) < hitRadius) {
+        if (distanceSquared(enemy, projectile) < hitRadius * hitRadius) {
           const destroyedPosition = { ...enemy };
           projectiles.splice(projectileIndex, 1);
 
@@ -672,9 +689,75 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
   };
 
   return {
+    getFrame: () => updateFrame(),
     getSnapshot,
     step
   };
+
+  function getEnemyBeamSnapshots() {
+    const beams: EnemyBeam[] = [];
+    updateEnemyBeams(beams);
+    return beams.map((beam) =>
+      beam.kind === "horizontal"
+        ? { ...beam }
+        : {
+            end: { ...beam.end },
+            id: beam.id,
+            kind: "aimed" as const,
+            start: { ...beam.start }
+          }
+    );
+  }
+
+  function updateEnemyBeams(beams: EnemyBeam[]) {
+    beams.length = 0;
+
+    for (const enemy of enemies) {
+      if (enemy.kind === "miniBoss" && enemy.beamTimeRemaining > 0) {
+        beams.push(upsertHorizontalBeam(enemy.id, enemy.y));
+        continue;
+      }
+
+      if (enemy.kind === "turret" && enemy.turretBeams.length > 0) {
+        for (const beam of enemy.turretBeams) {
+          const start = getTurretBeamStart(enemy);
+          beams.push(upsertAimedBeam(beam.id, start, getBeamEnd(start, beam.target)));
+        }
+        continue;
+      }
+
+      if (enemy.kind === "boss" && enemy.beamTimeRemaining > 0 && enemy.beamStart && enemy.beamTarget) {
+        beams.push(upsertAimedBeam(enemy.id, enemy.beamStart, getBeamEnd(enemy.beamStart, enemy.beamTarget)));
+      }
+    }
+  }
+
+  function upsertHorizontalBeam(id: number, y: number): EnemyBeam {
+    const cached = enemyBeamCache.get(id);
+
+    if (cached?.kind === "horizontal") {
+      cached.y = y;
+      return cached;
+    }
+
+    const beam: EnemyBeam = { id, kind: "horizontal", y };
+    enemyBeamCache.set(id, beam);
+    return beam;
+  }
+
+  function upsertAimedBeam(id: number, start: Vector2, end: Vector2): EnemyBeam {
+    const cached = enemyBeamCache.get(id);
+
+    if (cached?.kind === "aimed") {
+      cached.start = start;
+      cached.end = end;
+      return cached;
+    }
+
+    const beam: EnemyBeam = { end, id, kind: "aimed", start };
+    enemyBeamCache.set(id, beam);
+    return beam;
+  }
 
   function updateTurret(enemy: Enemy, gameSpeedScale: number, delta: number, events: SimulationEvent[]) {
     enemy.x -= enemySpeed * groundScrollSpeedMultiplier * gameSpeedScale * delta;
@@ -682,13 +765,9 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
 
     for (let beamIndex = enemy.turretBeams.length - 1; beamIndex >= 0; beamIndex -= 1) {
       const beam = enemy.turretBeams[beamIndex];
-      const segment = getTurretBeamSegment(enemy, beam);
       beam.timeRemaining = Math.max(0, beam.timeRemaining - delta);
 
-      if (
-        !beam.hasHitPlayer &&
-        isPointNearLineSegment(player, segment.start, getBeamEnd(segment.start, segment.target), turretBeamHalfWidth)
-      ) {
+      if (!beam.hasHitPlayer && isPointNearExtendedBeam(player, getTurretBeamStart(enemy), beam.target, turretBeamHalfWidth)) {
         beam.hasHitPlayer = true;
         damagePlayer(events, turretBeamDamage);
       }
@@ -773,7 +852,12 @@ export function createSpaceShooterSimulation(initialProgress?: Partial<Simulatio
     } else if (enemy.beamTimeRemaining > 0) {
       enemy.beamTimeRemaining = Math.max(0, enemy.beamTimeRemaining - delta);
 
-      if (!enemy.beamHasHitPlayer && enemy.beamStart && enemy.beamTarget && isPointNearLineSegment(player, enemy.beamStart, getBeamEnd(enemy.beamStart, enemy.beamTarget), bossBeamHalfWidth)) {
+      if (
+        !enemy.beamHasHitPlayer &&
+        enemy.beamStart &&
+        enemy.beamTarget &&
+        isPointNearExtendedBeam(player, enemy.beamStart, enemy.beamTarget, bossBeamHalfWidth)
+      ) {
         enemy.beamHasHitPlayer = true;
         damagePlayer(events, enemyBeamDamage);
       }
@@ -799,8 +883,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function distance(a: Vector2, b: Vector2) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
+function distanceSquared(a: Vector2, b: Vector2) {
+  const deltaX = a.x - b.x;
+  const deltaY = a.y - b.y;
+
+  return deltaX * deltaX + deltaY * deltaY;
 }
 
 function randomRange(min: number, max: number) {
@@ -818,6 +905,20 @@ function cloneGroundProfile(profile: GroundProfile | undefined): GroundProfile |
   };
 }
 
+function normalizeInitialTerrainProfile(profile: GroundProfile | undefined) {
+  if (!profile || profile.points.length === 0) return;
+
+  while (profile.points[0].x > terrainLeftEdge) {
+    const firstPoint = profile.points[0];
+    profile.points.unshift({
+      x: firstPoint.x - groundPointSpacing,
+      y: getNextTerrainHeight(firstPoint.y, profile)
+    });
+  }
+
+  extendTerrainRight(profile);
+}
+
 function updateTerrainProfile(profile: GroundProfile | undefined, scrollAmount: number) {
   if (!profile) return;
 
@@ -825,11 +926,15 @@ function updateTerrainProfile(profile: GroundProfile | undefined, scrollAmount: 
     point.x -= scrollAmount;
   }
 
-  while (profile.points.length > 2 && profile.points[1].x < bounds.left - groundOffscreenBuffer) {
+  while (profile.points.length > 2 && profile.points[1].x < terrainLeftEdge) {
     profile.points.shift();
   }
 
-  while (profile.points[profile.points.length - 1].x < bounds.right + groundOffscreenBuffer + groundPointSpacing) {
+  extendTerrainRight(profile);
+}
+
+function extendTerrainRight(profile: GroundProfile) {
+  while (profile.points[profile.points.length - 1].x < terrainRightEdge) {
     const previousPoint = profile.points[profile.points.length - 1];
     profile.points.push({
       x: previousPoint.x + groundPointSpacing,
@@ -884,13 +989,6 @@ function getTurretBeamStart(enemy: Enemy): Vector2 {
   return { x: enemy.x - 0.43, y: enemy.y + getTurretVerticalSign(enemy) * 0.25 };
 }
 
-function getTurretBeamSegment(enemy: Enemy, beam: TurretBeam) {
-  return {
-    start: getTurretBeamStart(enemy),
-    target: beam.target
-  };
-}
-
 function getBossBeamStart(enemy: Enemy): Vector2 {
   return { x: enemy.x + bossFrontGunOffsetX, y: enemy.y };
 }
@@ -911,22 +1009,26 @@ function getBeamEnd(start: Vector2, target: Vector2): Vector2 {
   };
 }
 
-function isPointNearLineSegment(point: Vector2, start: Vector2, end: Vector2, maxDistance: number) {
-  const segmentX = end.x - start.x;
-  const segmentY = end.y - start.y;
+function isPointNearExtendedBeam(point: Vector2, start: Vector2, target: Vector2, maxDistance: number) {
+  const targetDeltaX = target.x - start.x;
+  const targetDeltaY = target.y - start.y;
+  const targetLength = Math.hypot(targetDeltaX, targetDeltaY) || 1;
+  const extension = 9;
+  const segmentX = (targetDeltaX / targetLength) * extension;
+  const segmentY = (targetDeltaY / targetLength) * extension;
   const segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
 
   if (segmentLengthSquared === 0) {
-    return distance(point, start) <= maxDistance;
+    return distanceSquared(point, start) <= maxDistance * maxDistance;
   }
 
   const t = clamp(((point.x - start.x) * segmentX + (point.y - start.y) * segmentY) / segmentLengthSquared, 0, 1);
-  const closest = {
-    x: start.x + segmentX * t,
-    y: start.y + segmentY * t
-  };
+  const closestX = start.x + segmentX * t;
+  const closestY = start.y + segmentY * t;
+  const deltaX = point.x - closestX;
+  const deltaY = point.y - closestY;
 
-  return distance(point, closest) <= maxDistance;
+  return deltaX * deltaX + deltaY * deltaY <= maxDistance * maxDistance;
 }
 
 function moveToward(current: number, target: number, maxDelta: number) {

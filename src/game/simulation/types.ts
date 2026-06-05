@@ -134,6 +134,27 @@ export type SimulationEvent =
 
 export type SimulationInitialProgress = Pick<Snapshot, "elapsedTime" | "health" | "level" | "maxHealth" | "nextLevelScore" | "score" | "shieldCharges">;
 
+export type SimulationFrame = {
+  player: Vector2;
+  projectiles: Projectile[];
+  enemies: Enemy[];
+  enemyProjectiles: EnemyProjectile[];
+  enemyBeams: EnemyBeam[];
+  powerUps: PowerUp[];
+  ceiling: GroundProfile | null;
+  ground: GroundProfile | null;
+  elapsedTime: number;
+  score: number;
+  shieldCharges: number;
+  level: number;
+  nextLevelScore: number;
+  timeScale: number;
+  weaponPowerTimeRemaining: number;
+  health: number;
+  maxHealth: number;
+  events: SimulationEvent[];
+};
+
 export type Snapshot = {
   player: Vector2;
   projectiles: Projectile[];

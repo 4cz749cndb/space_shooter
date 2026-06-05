@@ -3,12 +3,27 @@
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Mesh, MeshBasicMaterial } from "three";
-import { Shape } from "three";
+import { Shape, ShapeGeometry } from "three";
 import { GameOverScreen, RetroMenu, StageBriefingScreen } from "@/components/game/GameScreens";
+import { Hud } from "@/components/game/Hud";
 import { type ExplosionKind, useEightBitMusic } from "@/components/game/useEightBitMusic";
 import { useHighScores } from "@/components/game/useHighScores";
+import { useKeyboardActions } from "@/components/game/useKeyboardActions";
 import { createSpaceShooterSimulation } from "@/game/simulation/createSpaceShooterSimulation";
-import type { ActionState, Enemy, EnemyBeam, GroundProfile, PowerUpKind, SimulationInitialProgress, Snapshot, Vector2 } from "@/game/simulation/types";
+import type {
+  ActionState,
+  Enemy,
+  EnemyBeam,
+  EnemyProjectile,
+  GroundProfile,
+  PowerUp,
+  PowerUpKind,
+  Projectile,
+  SimulationFrame,
+  SimulationInitialProgress,
+  Snapshot,
+  Vector2
+} from "@/game/simulation/types";
 import { qualifiesForHighScores } from "@/lib/highScores";
 
 type GamePhase = "menu" | "stageSelect" | "stageBriefing" | "playing" | "gameOver" | "exited" | "highScores";
@@ -414,7 +429,9 @@ function SpaceScene({
   const gameOverTimerRef = useRef<number | null>(null);
   const lastHudSnapshotRef = useRef<Snapshot>(simulation.getSnapshot());
   const lastHudUpdateTimeRef = useRef(0);
-  const [sceneSnapshot, setSceneSnapshot] = useState(() => simulation.getSnapshot());
+  const [sceneFrame] = useState(() => simulation.getFrame());
+  const sceneSignatureRef = useRef(getSceneSignature(sceneFrame));
+  const [, setSceneVersion] = useState(0);
   const [explosions, setExplosions] = useState<Explosion[]>([]);
   const [shieldFlashes, setShieldFlashes] = useState<ShieldFlash[]>([]);
 
@@ -431,18 +448,16 @@ function SpaceScene({
 
   useFrame((_, delta) => {
     elapsedTimeRef.current += delta;
-    const snapshot = simulation.step(Math.min(delta, 0.05), actions);
+    const frame = simulation.step(Math.min(delta, 0.05), actions);
     const elapsedTime = elapsedTimeRef.current;
     const blinkRemaining = blinkUntilRef.current - elapsedTime;
     const shouldPublishHudSnapshot =
       elapsedTime - lastHudUpdateTimeRef.current >= hudSnapshotInterval ||
-      hasHudSnapshotChanged(snapshot, lastHudSnapshotRef.current);
-
-    setSceneSnapshot(snapshot);
+      hasHudSnapshotChanged(frame, lastHudSnapshotRef.current);
 
     if (playerRef.current) {
-      playerRef.current.position.x = snapshot.player.x;
-      playerRef.current.position.y = snapshot.player.y;
+      playerRef.current.position.x = frame.player.x;
+      playerRef.current.position.y = frame.player.y;
     }
 
     if (playerMaterialRef.current) {
@@ -451,19 +466,26 @@ function SpaceScene({
     }
 
     if (shouldPublishHudSnapshot) {
+      const snapshot = simulation.getSnapshot(frame.events);
       lastHudSnapshotRef.current = snapshot;
       lastHudUpdateTimeRef.current = elapsedTime;
       onSnapshot(snapshot);
     }
 
-    onTimeScaleChange(snapshot.timeScale);
+    onTimeScaleChange(frame.timeScale);
 
-    if (snapshot.events.length === 0) return;
+    const nextSceneSignature = getSceneSignature(frame);
+    if (nextSceneSignature !== sceneSignatureRef.current) {
+      sceneSignatureRef.current = nextSceneSignature;
+      setSceneVersion((version) => version + 1);
+    }
+
+    if (frame.events.length === 0) return;
 
     const nextExplosions: Explosion[] = [];
     const nextShieldFlashes: ShieldFlash[] = [];
 
-    for (const event of snapshot.events) {
+    for (const event of frame.events) {
       if (event.type === "weaponFired") {
         playPew();
       }
@@ -490,8 +512,8 @@ function SpaceScene({
         nextShieldFlashes.push({
           id: shieldFlashIdRef.current++,
           kind: event.type === "powerUpCollected" ? event.kind : "shield",
-          x: snapshot.player.x,
-          y: snapshot.player.y
+          x: frame.player.x,
+          y: frame.player.y
         });
       }
 
@@ -506,11 +528,12 @@ function SpaceScene({
       }
 
       if (event.type === "playerDestroyed" && !gameOverRef.current) {
+        const finalSnapshot = simulation.getSnapshot(frame.events);
         gameOverRef.current = true;
         playerDestroyedRef.current = true;
-        lastHudSnapshotRef.current = snapshot;
+        lastHudSnapshotRef.current = finalSnapshot;
         lastHudUpdateTimeRef.current = elapsedTime;
-        onSnapshot(snapshot);
+        onSnapshot(finalSnapshot);
         onStopMusic();
         playExplosion("player");
         nextExplosions.push({
@@ -519,14 +542,15 @@ function SpaceScene({
           x: event.position.x,
           y: event.position.y
         });
-        gameOverTimerRef.current = window.setTimeout(() => onGameOver(snapshot), 700);
+        gameOverTimerRef.current = window.setTimeout(() => onGameOver(finalSnapshot), 700);
       }
 
       if (event.type === "stageComplete" && !gameOverRef.current) {
+        const finalSnapshot = simulation.getSnapshot(frame.events);
         gameOverRef.current = true;
-        lastHudSnapshotRef.current = snapshot;
+        lastHudSnapshotRef.current = finalSnapshot;
         lastHudUpdateTimeRef.current = elapsedTime;
-        onSnapshot(snapshot);
+        onSnapshot(finalSnapshot);
         onStopMusic();
         playExplosion("enemy");
         nextExplosions.push({
@@ -535,7 +559,7 @@ function SpaceScene({
           x: event.position.x,
           y: event.position.y
         });
-        gameOverTimerRef.current = window.setTimeout(() => onStageComplete(snapshot), 900);
+        gameOverTimerRef.current = window.setTimeout(() => onStageComplete(finalSnapshot), 900);
       }
     }
 
@@ -551,29 +575,20 @@ function SpaceScene({
   return (
     <>
       {backgroundKind === "rock" ? <RockBackground /> : <Starfield />}
-      {sceneSnapshot.ceiling ? <Terrain terrain={sceneSnapshot.ceiling} side="ceiling" /> : null}
-      {sceneSnapshot.ground ? <GroundTerrain ground={sceneSnapshot.ground} /> : null}
-      <mesh ref={playerRef} position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
+      {sceneFrame.ceiling ? <Terrain terrain={sceneFrame.ceiling} side="ceiling" /> : null}
+      {sceneFrame.ground ? <GroundTerrain ground={sceneFrame.ground} /> : null}
+      <mesh ref={playerRef} position={[sceneFrame.player.x, sceneFrame.player.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
         <coneGeometry args={[0.29, 0.74, 3]} />
         <meshBasicMaterial ref={playerMaterialRef} color="#66e3ff" />
       </mesh>
-      {sceneSnapshot.shieldCharges > 0 ? (
-        <PlayerShield position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0.04]} charges={sceneSnapshot.shieldCharges} />
+      {sceneFrame.shieldCharges > 0 ? (
+        <PlayerShield charges={sceneFrame.shieldCharges} player={sceneFrame.player} />
       ) : null}
-      {sceneSnapshot.weaponPowerTimeRemaining > 0 ? (
-        <WeaponPowerAura position={[sceneSnapshot.player.x, sceneSnapshot.player.y, 0.05]} />
-      ) : null}
-      {sceneSnapshot.projectiles.map((projectile) => (
-        <mesh
-          key={projectile.id}
-          position={[projectile.x, projectile.y, 0]}
-          rotation={[0, 0, Math.atan2(projectile.velocityY, projectile.velocityX) - Math.PI / 2]}
-        >
-          <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
-          <meshBasicMaterial color="#ffbf69" />
-        </mesh>
+      {sceneFrame.weaponPowerTimeRemaining > 0 ? <WeaponPowerAura player={sceneFrame.player} /> : null}
+      {sceneFrame.projectiles.map((projectile) => (
+        <PlayerProjectileMesh key={projectile.id} projectile={projectile} />
       ))}
-      {sceneSnapshot.enemies.map((enemy) =>
+      {sceneFrame.enemies.map((enemy) =>
         enemy.kind === "boss" ? (
           <BossEnemy key={enemy.id} enemy={enemy} />
         ) : enemy.kind === "miniBoss" ? (
@@ -581,23 +596,17 @@ function SpaceScene({
         ) : enemy.kind === "turret" ? (
           <TurretEnemy key={enemy.id} enemy={enemy} />
         ) : (
-          <mesh key={enemy.id} position={[enemy.x, enemy.y, 0]}>
-            {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
-            <meshBasicMaterial color={enemy.kind === "sineGunner" ? "#8cff98" : "#ff5d73"} />
-          </mesh>
+          <BasicEnemy key={enemy.id} enemy={enemy} />
         )
       )}
-      {sceneSnapshot.enemyBeams.map((beam) => (
+      {sceneFrame.enemyBeams.map((beam) => (
         <EnemyBeamEffect beam={beam} key={beam.id} />
       ))}
-      {sceneSnapshot.enemyProjectiles.map((projectile) => (
-        <mesh key={projectile.id} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
-          <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
-          <meshBasicMaterial color="#ff5d73" />
-        </mesh>
+      {sceneFrame.enemyProjectiles.map((projectile) => (
+        <EnemyProjectileMesh key={projectile.id} projectile={projectile} />
       ))}
-      {sceneSnapshot.powerUps.map((powerUp) => (
-        <PowerUpPickup key={powerUp.id} kind={powerUp.kind} position={[powerUp.x, powerUp.y, 0.06]} />
+      {sceneFrame.powerUps.map((powerUp) => (
+        <PowerUpPickup key={powerUp.id} powerUp={powerUp} />
       ))}
       {explosions.map((explosion) => (
         <ExplosionEffect
@@ -619,13 +628,92 @@ function SpaceScene({
   );
 }
 
-function hasHudSnapshotChanged(next: Snapshot, previous: Snapshot) {
+function hasHudSnapshotChanged(next: SimulationFrame, previous: Snapshot) {
   return (
     next.score !== previous.score ||
     next.level !== previous.level ||
     next.nextLevelScore !== previous.nextLevelScore ||
     next.health !== previous.health ||
     next.maxHealth !== previous.maxHealth
+  );
+}
+
+function getSceneSignature(frame: SimulationFrame) {
+  return [
+    getIdsSignature(frame.projectiles),
+    frame.enemies
+      .map(
+        (enemy) =>
+          `${enemy.id}:${enemy.kind}:${Number(enemy.beamChargeTimeRemaining > 0)}:${Number(enemy.beamTimeRemaining > 0)}:${Number(
+            enemy.turretChargeTimeRemaining > 0
+          )}:${enemy.turretBeams.length}`
+      )
+      .join(","),
+    getIdsSignature(frame.enemyProjectiles),
+    frame.enemyBeams.map((beam) => `${beam.id}:${beam.kind}`).join(","),
+    frame.powerUps.map((powerUp) => `${powerUp.id}:${powerUp.kind}`).join(","),
+    Number(frame.shieldCharges > 0),
+    Number(frame.weaponPowerTimeRemaining > 0),
+    frame.ground?.points.length ?? 0,
+    frame.ceiling?.points.length ?? 0
+  ].join("|");
+}
+
+function getIdsSignature(items: Array<{ id: number }>) {
+  return items.map((item) => item.id).join(",");
+}
+
+function PlayerProjectileMesh({ projectile }: { projectile: Projectile }) {
+  const meshRef = useRef<Mesh>(null);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+
+    meshRef.current.position.x = projectile.x;
+    meshRef.current.position.y = projectile.y;
+  });
+
+  return (
+    <mesh ref={meshRef} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, Math.atan2(projectile.velocityY, projectile.velocityX) - Math.PI / 2]}>
+      <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
+      <meshBasicMaterial color="#ffbf69" />
+    </mesh>
+  );
+}
+
+function EnemyProjectileMesh({ projectile }: { projectile: EnemyProjectile }) {
+  const meshRef = useRef<Mesh>(null);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+
+    meshRef.current.position.x = projectile.x;
+    meshRef.current.position.y = projectile.y;
+  });
+
+  return (
+    <mesh ref={meshRef} position={[projectile.x, projectile.y, 0]} rotation={[0, 0, -Math.PI / 2]}>
+      <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
+      <meshBasicMaterial color="#ff5d73" />
+    </mesh>
+  );
+}
+
+function BasicEnemy({ enemy }: { enemy: Enemy }) {
+  const meshRef = useRef<Mesh>(null);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+
+    meshRef.current.position.x = enemy.x;
+    meshRef.current.position.y = enemy.y;
+  });
+
+  return (
+    <mesh ref={meshRef} position={[enemy.x, enemy.y, 0]}>
+      {enemy.kind === "sineGunner" ? <dodecahedronGeometry args={[0.27, 0]} /> : <octahedronGeometry args={[0.26, 0]} />}
+      <meshBasicMaterial color={enemy.kind === "sineGunner" ? "#8cff98" : "#ff5d73"} />
+    </mesh>
   );
 }
 
@@ -641,6 +729,8 @@ function TurretEnemy({ enemy }: { enemy: Enemy }) {
     elapsedTimeRef.current += delta;
 
     if (groupRef.current) {
+      groupRef.current.position.x = enemy.x;
+      groupRef.current.position.y = enemy.y;
       groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 3.2) * 0.015;
     }
 
@@ -684,6 +774,8 @@ function MiniBossEnemy({ enemy }: { enemy: Enemy }) {
     if (!groupRef.current) return;
 
     elapsedTimeRef.current += delta;
+    groupRef.current.position.x = enemy.x;
+    groupRef.current.position.y = enemy.y;
     groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 2.4) * 0.04;
     groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 5) * 0.025);
 
@@ -746,6 +838,8 @@ function BossEnemy({ enemy }: { enemy: Enemy }) {
     if (!groupRef.current) return;
 
     elapsedTimeRef.current += delta;
+    groupRef.current.position.x = enemy.x;
+    groupRef.current.position.y = enemy.y;
     groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 1.6) * 0.025;
     groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 3) * 0.012);
 
@@ -799,6 +893,19 @@ function EnemyBeamEffect({ beam }: { beam: EnemyBeam }) {
 
     elapsedTimeRef.current += delta;
     const pulse = 1 + Math.sin(elapsedTimeRef.current * 34) * 0.08;
+
+    if (beam.kind === "aimed") {
+      const length = distance2D(beam.start, beam.end);
+      const center = midpoint2D(beam.start, beam.end);
+      groupRef.current.position.x = center.x;
+      groupRef.current.position.y = center.y;
+      groupRef.current.rotation.z = Math.atan2(beam.end.y - beam.start.y, beam.end.x - beam.start.x);
+      groupRef.current.scale.x = length;
+      groupRef.current.scale.y = pulse;
+      return;
+    }
+
+    groupRef.current.position.y = beam.y;
     groupRef.current.scale.y = pulse;
   });
 
@@ -808,17 +915,17 @@ function EnemyBeamEffect({ beam }: { beam: EnemyBeam }) {
     const angle = Math.atan2(beam.end.y - beam.start.y, beam.end.x - beam.start.x);
 
     return (
-      <group ref={groupRef} position={[center.x, center.y, 0.05]} rotation={[0, 0, angle]}>
+      <group ref={groupRef} position={[center.x, center.y, 0.05]} rotation={[0, 0, angle]} scale={[length, 1, 1]}>
         <mesh>
-          <boxGeometry args={[length, 0.44, 0.02]} />
+          <boxGeometry args={[1, 0.44, 0.02]} />
           <meshBasicMaterial color="#ff2f7d" transparent opacity={0.24} />
         </mesh>
         <mesh>
-          <boxGeometry args={[length, 0.2, 0.03]} />
+          <boxGeometry args={[1, 0.2, 0.03]} />
           <meshBasicMaterial color="#ff5d73" transparent opacity={0.74} />
         </mesh>
         <mesh>
-          <boxGeometry args={[length, 0.06, 0.04]} />
+          <boxGeometry args={[1, 0.06, 0.04]} />
           <meshBasicMaterial color="#eef7ff" transparent opacity={0.92} />
         </mesh>
       </group>
@@ -843,7 +950,7 @@ function EnemyBeamEffect({ beam }: { beam: EnemyBeam }) {
   );
 }
 
-function PlayerShield({ charges, position }: { charges: number; position: [number, number, number] }) {
+function PlayerShield({ charges, player }: { charges: number; player: Vector2 }) {
   const groupRef = useRef<Group>(null);
   const elapsedTimeRef = useRef(0);
 
@@ -851,13 +958,15 @@ function PlayerShield({ charges, position }: { charges: number; position: [numbe
     if (!groupRef.current) return;
 
     elapsedTimeRef.current += delta;
+    groupRef.current.position.x = player.x;
+    groupRef.current.position.y = player.y;
     const pulse = 1 + Math.sin(elapsedTimeRef.current * 6) * 0.05 + Math.min(charges - 1, 3) * 0.03;
     groupRef.current.scale.setScalar(pulse);
     groupRef.current.rotation.z += 0.025;
   });
 
   return (
-    <group ref={groupRef} position={position}>
+    <group ref={groupRef} position={[player.x, player.y, 0.04]}>
       <mesh>
         <ringGeometry args={[0.48, 0.54, 28]} />
         <meshBasicMaterial color="#66e3ff" transparent opacity={0.5} />
@@ -870,7 +979,7 @@ function PlayerShield({ charges, position }: { charges: number; position: [numbe
   );
 }
 
-function WeaponPowerAura({ position }: { position: [number, number, number] }) {
+function WeaponPowerAura({ player }: { player: Vector2 }) {
   const groupRef = useRef<Group>(null);
   const elapsedTimeRef = useRef(0);
 
@@ -878,12 +987,14 @@ function WeaponPowerAura({ position }: { position: [number, number, number] }) {
     if (!groupRef.current) return;
 
     elapsedTimeRef.current += delta;
+    groupRef.current.position.x = player.x;
+    groupRef.current.position.y = player.y;
     groupRef.current.rotation.z = Math.sin(elapsedTimeRef.current * 8) * 0.08;
     groupRef.current.scale.setScalar(1 + Math.sin(elapsedTimeRef.current * 10) * 0.04);
   });
 
   return (
-    <group ref={groupRef} position={position}>
+    <group ref={groupRef} position={[player.x, player.y, 0.05]}>
       <mesh>
         <ringGeometry args={[0.58, 0.64, 28]} />
         <meshBasicMaterial color="#ffbf69" transparent opacity={0.38} />
@@ -900,7 +1011,7 @@ function WeaponPowerAura({ position }: { position: [number, number, number] }) {
   );
 }
 
-function PowerUpPickup({ kind, position }: { kind: PowerUpKind; position: [number, number, number] }) {
+function PowerUpPickup({ powerUp }: { powerUp: PowerUp }) {
   const groupRef = useRef<Group>(null);
   const elapsedTimeRef = useRef(0);
 
@@ -908,27 +1019,29 @@ function PowerUpPickup({ kind, position }: { kind: PowerUpKind; position: [numbe
     if (!groupRef.current) return;
 
     elapsedTimeRef.current += delta;
+    groupRef.current.position.x = powerUp.x;
+    groupRef.current.position.y = powerUp.y;
     const pulse = 1 + Math.sin(elapsedTimeRef.current * 7) * 0.08;
     groupRef.current.scale.setScalar(pulse);
     groupRef.current.rotation.z += delta * 2.5;
   });
 
   return (
-    <group ref={groupRef} position={position}>
+    <group ref={groupRef} position={[powerUp.x, powerUp.y, 0.06]}>
       <mesh>
         <ringGeometry args={[0.2, 0.3, 24]} />
-        <meshBasicMaterial color={getPowerUpColor(kind)} transparent opacity={0.9} />
+        <meshBasicMaterial color={getPowerUpColor(powerUp.kind)} transparent opacity={0.9} />
       </mesh>
       <mesh>
         <circleGeometry args={[0.12, 16]} />
         <meshBasicMaterial color="#eef7ff" transparent opacity={0.82} />
       </mesh>
-      {kind === "shield" ? (
+      {powerUp.kind === "shield" ? (
         <mesh rotation={[0, 0, Math.PI / 4]}>
           <boxGeometry args={[0.1, 0.34, 0.02]} />
           <meshBasicMaterial color="#8cff98" transparent opacity={0.88} />
         </mesh>
-      ) : kind === "health" ? (
+      ) : powerUp.kind === "health" ? (
         <>
           <mesh>
             <boxGeometry args={[0.32, 0.09, 0.02]} />
@@ -1069,61 +1182,109 @@ function GroundTerrain({ ground }: { ground: GroundProfile }) {
 function Terrain({ side, terrain }: { side: "floor" | "ceiling"; terrain: GroundProfile }) {
   const terrainFillY = side === "floor" ? -4.6 : 4.6;
   const isCeiling = side === "ceiling";
-  const terrainShape = useMemo(() => {
-    const shape = new Shape();
-    const firstPoint = terrain.points[0];
-    const lastPoint = terrain.points[terrain.points.length - 1];
-
-    shape.moveTo(firstPoint.x, terrainFillY);
-
-    for (const point of terrain.points) {
-      shape.lineTo(point.x, point.y);
-    }
-
-    shape.lineTo(lastPoint.x, terrainFillY);
-    shape.closePath();
-
-    return shape;
-  }, [terrain, terrainFillY]);
+  const fillRef = useRef<Mesh>(null);
+  const edgeRefs = useRef<Array<Mesh | null>>([]);
+  const pointRefs = useRef<Array<Mesh | null>>([]);
+  const terrainShape = useMemo(() => createTerrainShape(terrain, terrainFillY), [terrain, terrainFillY]);
 
   const edgeSegments = useMemo(
-    () =>
-      terrain.points.slice(1).map((point, index) => {
-        const previous = terrain.points[index];
-        const deltaX = point.x - previous.x;
-        const deltaY = point.y - previous.y;
-
-        return {
-          angle: Math.atan2(deltaY, deltaX),
-          id: index,
-          length: Math.hypot(deltaX, deltaY),
-          x: (previous.x + point.x) / 2,
-          y: (previous.y + point.y) / 2
-        };
-      }),
+    () => getTerrainEdgeSegments(terrain),
     [terrain]
   );
 
+  useFrame(() => {
+    if (fillRef.current) {
+      fillRef.current.geometry.dispose();
+      fillRef.current.geometry = new ShapeGeometry(createTerrainShape(terrain, terrainFillY));
+    }
+
+    const nextEdgeSegments = getTerrainEdgeSegments(terrain);
+    for (const segment of nextEdgeSegments) {
+      const edge = edgeRefs.current[segment.id];
+      if (!edge) continue;
+
+      edge.position.x = segment.x;
+      edge.position.y = segment.y;
+      edge.rotation.z = segment.angle;
+      edge.scale.x = segment.length;
+    }
+
+    terrain.points.forEach((point, index) => {
+      const pointMesh = pointRefs.current[index];
+      if (!pointMesh) return;
+
+      pointMesh.position.x = point.x;
+      pointMesh.position.y = point.y + (isCeiling ? 0.14 : -0.14);
+    });
+  });
+
   return (
     <group position={[0, 0, -0.18]}>
-      <mesh>
+      <mesh ref={fillRef}>
         <shapeGeometry args={[terrainShape]} />
         <meshBasicMaterial color="#18202a" transparent opacity={0.96} />
       </mesh>
       {edgeSegments.map((segment) => (
-        <mesh key={segment.id} position={[segment.x, segment.y, 0.02]} rotation={[0, 0, segment.angle]}>
-          <boxGeometry args={[segment.length, 0.045, 0.02]} />
+        <mesh
+          key={segment.id}
+          ref={(mesh) => {
+            edgeRefs.current[segment.id] = mesh;
+          }}
+          position={[segment.x, segment.y, 0.02]}
+          rotation={[0, 0, segment.angle]}
+          scale={[segment.length, 1, 1]}
+        >
+          <boxGeometry args={[1, 0.045, 0.02]} />
           <meshBasicMaterial color="#ffbf69" transparent opacity={0.78} />
         </mesh>
       ))}
       {terrain.points.map((point, index) => (
-        <mesh key={index} position={[point.x, point.y + (isCeiling ? 0.14 : -0.14), 0.03]}>
+        <mesh
+          key={index}
+          ref={(mesh) => {
+            pointRefs.current[index] = mesh;
+          }}
+          position={[point.x, point.y + (isCeiling ? 0.14 : -0.14), 0.03]}
+        >
           <boxGeometry args={[0.16, 0.28, 0.02]} />
           <meshBasicMaterial color="#2c3949" transparent opacity={0.9} />
         </mesh>
       ))}
     </group>
   );
+}
+
+function createTerrainShape(terrain: GroundProfile, terrainFillY: number) {
+  const shape = new Shape();
+  const firstPoint = terrain.points[0];
+  const lastPoint = terrain.points[terrain.points.length - 1];
+
+  shape.moveTo(firstPoint.x, terrainFillY);
+
+  for (const point of terrain.points) {
+    shape.lineTo(point.x, point.y);
+  }
+
+  shape.lineTo(lastPoint.x, terrainFillY);
+  shape.closePath();
+
+  return shape;
+}
+
+function getTerrainEdgeSegments(terrain: GroundProfile) {
+  return terrain.points.slice(1).map((point, index) => {
+    const previous = terrain.points[index];
+    const deltaX = point.x - previous.x;
+    const deltaY = point.y - previous.y;
+
+    return {
+      angle: Math.atan2(deltaY, deltaX),
+      id: index,
+      length: Math.hypot(deltaX, deltaY),
+      x: (previous.x + point.x) / 2,
+      y: (previous.y + point.y) / 2
+    };
+  });
 }
 
 function Starfield() {
@@ -1201,65 +1362,6 @@ function RockBackground() {
   );
 }
 
-function Hud({
-  currentStage,
-  snapshot,
-  stageCount,
-  onExit
-}: {
-  currentStage: StageDefinition;
-  snapshot: Snapshot;
-  stageCount: number;
-  onExit: () => void;
-}) {
-  const healthPercent = `${(snapshot.health / snapshot.maxHealth) * 100}%`;
-
-  return (
-    <section className="hud" aria-label="Game status">
-      <div className="hud-top">
-        <div className="hud-panel">
-          <p className="hud-label">Stage</p>
-          <p className="hud-value">
-            {currentStage.id}/{stageCount}
-          </p>
-          <p className="hud-subvalue">{currentStage.setting}</p>
-        </div>
-        <div className="hud-panel">
-          <p className="hud-label">Score</p>
-          <p className="hud-value">{snapshot.score}</p>
-        </div>
-        <div className="hud-panel hud-level">
-          <p className="hud-label">Level</p>
-          <p className="hud-value">{snapshot.level}</p>
-          <p className="hud-subvalue">Next {snapshot.nextLevelScore}</p>
-        </div>
-        <div className="hud-panel hud-health">
-          <div className="hud-health-header">
-            <p className="hud-label">Health</p>
-            <p className="hud-health-count">
-              {snapshot.health}/{snapshot.maxHealth}
-            </p>
-          </div>
-          <div
-            className="health-bar"
-            role="meter"
-            aria-label="Player health"
-            aria-valuemin={0}
-            aria-valuemax={snapshot.maxHealth}
-            aria-valuenow={snapshot.health}
-          >
-            <div className="health-bar-fill" style={{ width: healthPercent }} />
-          </div>
-        </div>
-        <button className="hud-exit" type="button" onClick={onExit}>
-          Exit
-        </button>
-      </div>
-      <div className="hud-bottom">Dodge incoming objects from the right. Move with WASD or arrows. Fire with Space.</div>
-    </section>
-  );
-}
-
 function getSimulationInitialProgress(snapshot: Snapshot): Partial<SimulationInitialProgress> {
   return {
     elapsedTime: snapshot.elapsedTime,
@@ -1280,56 +1382,6 @@ function LevelUpBanner({ level }: { level: number }) {
       <span className="level-up-bonus">Max health restored</span>
     </div>
   );
-}
-
-function useKeyboardActions(active: boolean) {
-  const actions = useRef<ActionState>({
-    left: false,
-    right: false,
-    up: false,
-    down: false,
-    fire: false
-  });
-
-  useEffect(() => {
-    const clearActions = () => {
-      actions.current.left = false;
-      actions.current.right = false;
-      actions.current.up = false;
-      actions.current.down = false;
-      actions.current.fire = false;
-    };
-
-    if (!active) {
-      clearActions();
-      return;
-    }
-
-    const setAction = (event: KeyboardEvent, pressed: boolean) => {
-      if (event.code === "ArrowLeft" || event.code === "KeyA") actions.current.left = pressed;
-      if (event.code === "ArrowRight" || event.code === "KeyD") actions.current.right = pressed;
-      if (event.code === "ArrowUp" || event.code === "KeyW") actions.current.up = pressed;
-      if (event.code === "ArrowDown" || event.code === "KeyS") actions.current.down = pressed;
-      if (event.code === "Space") {
-        event.preventDefault();
-        actions.current.fire = pressed;
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => setAction(event, true);
-    const handleKeyUp = (event: KeyboardEvent) => setAction(event, false);
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      clearActions();
-    };
-  }, [active]);
-
-  return actions;
 }
 
 function seededRange(seed: number, min: number, max: number) {

@@ -63,6 +63,8 @@ export function useEightBitMusic() {
 
   const setIntensity = (timeScale: number) => {
     const nextIntensity = Math.min(Math.max(timeScale, 1), 2);
+    if (Math.abs(intensityRef.current - nextIntensity) < 0.01) return;
+
     intensityRef.current = nextIntensity;
 
     const context = audioRef.current;
